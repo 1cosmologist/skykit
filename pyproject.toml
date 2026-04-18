@@ -4,8 +4,12 @@ requires = ["meson-python"]
 
 [project]
 name = "skykit"
+authors = [
+    {name = "Shamik Ghosh"}
+]
 dynamic = ["version"]
 description = "A package for sky tiling and scattering transforms"
+license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
