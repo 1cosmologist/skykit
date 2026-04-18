@@ -1,0 +1,508 @@
+"""
+healpix_tiling: Decompose HEALPix maps into overlapping square tiles and back.
+
+Supports scalar (intensity/temperature) maps and spin-2 polarisation
+(Stokes Q/U) maps.  For polarisation, Q and U values are parallel-
+transported to a common reference frame at the tile centre using
+quaternion rotations, so that each tile has a self-consistent
+polarisation convention.
+
+Border pixels are resolved by exact topological boundary unfolding. Any gaps in
+the margins (topological singularities) are rebinned by averaging the 
+ambiguous mappings. This acts directly on real pixel values (no interpolation).
+"""
+
+import numpy as np
+import healpy as hp
+
+import jax
+import jax.numpy as jnp
+
+from tileset import TileSet
+
+# ---------------------------------------------------------------------------
+# Exact Topological unwrapping (JAX)
+# ---------------------------------------------------------------------------
+
+@jax.jit
+def _resolve_x_jax(f, x, y, nside):
+    f_new, x_new, y_new = f, x, y
+    
+    m_xg = x >= nside
+    m_xg_f0 = m_xg & (f < 4)
+    m_xg_f4 = m_xg & (f >= 4) & (f < 8)
+    m_xg_f8 = m_xg & (f >= 8)
+    
+    f_new = jnp.where(m_xg_f0, (f + 1) % 4, f_new)
+    y_new = jnp.where(m_xg_f0, 2*nside - 1 - x, y_new)
+    x_new = jnp.where(m_xg_f0, y, x_new)
+    
+    f_new = jnp.where(m_xg_f4, f - 4, f_new)
+    x_new = jnp.where(m_xg_f4, x - nside, x_new)
+    
+    map_f8_xg = jnp.array([0,1,2,3,4,5,6,7,5,6,7,4])
+    f_new = jnp.where(m_xg_f8, map_f8_xg[f], f_new)
+    x_new = jnp.where(m_xg_f8, x - nside, x_new)
+    
+    m_xl = (x < 0) & (~m_xg) 
+    m_xl_f0 = m_xl & (f < 4)
+    m_xl_f4 = m_xl & (f >= 4) & (f < 8)
+    m_xl_f8 = m_xl & (f >= 8)
+    
+    f_new = jnp.where(m_xl_f0, f + 4, f_new)
+    x_new = jnp.where(m_xl_f0, x + nside, x_new)
+    
+    map_f4_xl = jnp.array([0,1,2,3,11,8,9,10,0,0,0,0])
+    f_new = jnp.where(m_xl_f4, map_f4_xl[f], f_new)
+    x_new = jnp.where(m_xl_f4, x + nside, x_new)
+    
+    map_f8_xl = jnp.array([0,0,0,0,0,0,0,0,11,8,9,10])
+    f_new = jnp.where(m_xl_f8, map_f8_xl[f], f_new)
+    y_new = jnp.where(m_xl_f8, -1 - x, y_new)
+    x_new = jnp.where(m_xl_f8, y, x_new)
+
+    return f_new, x_new, y_new
+
+@jax.jit
+def _resolve_y_jax(f, x, y, nside):
+    f_new, x_new, y_new = f, x, y
+    
+    m_yg = y >= nside
+    m_yg_f0 = m_yg & (f < 4)
+    m_yg_f4 = m_yg & (f >= 4) & (f < 8)
+    m_yg_f8 = m_yg & (f >= 8)
+    
+    f_new = jnp.where(m_yg_f0, (f - 1) % 4, f_new)
+    x_new = jnp.where(m_yg_f0, 2*nside - 1 - y, x_new)
+    y_new = jnp.where(m_yg_f0, x, y_new)
+    
+    map_f4_yg = jnp.array([0,1,2,3,3,0,1,2,0,0,0,0])
+    f_new = jnp.where(m_yg_f4, map_f4_yg[f], f_new)
+    y_new = jnp.where(m_yg_f4, y - nside, y_new)
+    
+    f_new = jnp.where(m_yg_f8, f - 4, f_new)
+    y_new = jnp.where(m_yg_f8, y - nside, y_new)
+    
+    m_yl = (y < 0) & (~m_yg)
+    m_yl_f0 = m_yl & (f < 4)
+    m_yl_f4 = m_yl & (f >= 4) & (f < 8)
+    m_yl_f8 = m_yl & (f >= 8)
+    
+    map_f0_yl = jnp.array([5,6,7,4,0,0,0,0,0,0,0,0])
+    f_new = jnp.where(m_yl_f0, map_f0_yl[f], f_new)
+    y_new = jnp.where(m_yl_f0, y + nside, y_new)
+    
+    f_new = jnp.where(m_yl_f4, f + 4, f_new)
+    y_new = jnp.where(m_yl_f4, y + nside, y_new)
+    
+    map_f8_yl = jnp.array([0,0,0,0,0,0,0,0,9,10,11,8])
+    f_new = jnp.where(m_yl_f8, map_f8_yl[f], f_new)
+    x_new = jnp.where(m_yl_f8, -1 - y, x_new)
+    y_new = jnp.where(m_yl_f8, x, y_new)
+    
+    return f_new, x_new, y_new
+
+@jax.jit
+def _unwrap_step_xy_jax(carry):
+    f, x, y, nside = carry
+    f, x, y = _resolve_x_jax(f, x, y, nside)
+    f, x, y = _resolve_y_jax(f, x, y, nside)
+    return (f, x, y, nside)
+
+@jax.jit
+def _unwrap_step_yx_jax(carry):
+    f, x, y, nside = carry
+    f, x, y = _resolve_y_jax(f, x, y, nside)
+    f, x, y = _resolve_x_jax(f, x, y, nside)
+    return (f, x, y, nside)
+
+@jax.jit
+def _cond_fun_jax(carry):
+    f, x, y, nside = carry
+    return jnp.any((x < 0) | (x >= nside) | (y < 0) | (y >= nside))
+
+@jax.jit
+def _unwrap_grid_vec_xy_jax(f_base, x_arr, y_arr, nside):
+    f_arr = jnp.full(x_arr.shape, f_base, dtype=jnp.int32)
+    f_res, x_res, y_res, _ = jax.lax.while_loop(_cond_fun_jax, _unwrap_step_xy_jax, (f_arr, x_arr, y_arr, nside))
+    return f_res, x_res, y_res
+
+@jax.jit
+def _unwrap_grid_vec_yx_jax(f_base, x_arr, y_arr, nside):
+    f_arr = jnp.full(x_arr.shape, f_base, dtype=jnp.int32)
+    f_res, x_res, y_res, _ = jax.lax.while_loop(_cond_fun_jax, _unwrap_step_yx_jax, (f_arr, x_arr, y_arr, nside))
+    return f_res, x_res, y_res
+
+def _unwrap_grid_vec(f_base, IX, IY, nside, order='xy'):
+    """
+    JAX vectorized exact topological unwrapping.
+    Walks out-of-bounds coordinates across HEALPix face boundaries iteratively.
+    """
+    x_arr = jnp.asarray(IX, dtype=jnp.int32)
+    y_arr = jnp.asarray(IY, dtype=jnp.int32)
+    
+    if order == 'xy':
+        f_res, x_res, y_res = _unwrap_grid_vec_xy_jax(f_base, x_arr, y_arr, nside)
+    else:
+        f_res, x_res, y_res = _unwrap_grid_vec_yx_jax(f_base, x_arr, y_arr, nside)
+        
+    return np.asarray(f_res, dtype=np.int64), np.asarray(x_res, dtype=np.int64), np.asarray(y_res, dtype=np.int64)
+
+
+# ---------------------------------------------------------------------------
+# Internal: polarisation rotation via quaternions
+# ---------------------------------------------------------------------------
+
+def _local_north(theta, phi):
+    """
+    Unit vector pointing toward the north pole in the tangent plane
+    at position (theta, phi) on the unit sphere.
+
+    This is -d(rhat)/d(theta), i.e. the theta-hat direction pointing
+    toward decreasing theta (toward the pole).
+    """
+    nx = -np.cos(theta) * np.cos(phi)
+    ny = -np.cos(theta) * np.sin(phi)
+    nz = np.sin(theta)
+    return nx, ny, nz
+
+
+def _compute_psi(nside, face, tx, ty, tile_nside, ipix_tile):
+    """
+    Compute the parallel-transport rotation angle psi at every pixel
+    in a tile (fully vectorised).
+
+    psi is the angle from the pixel's HEALPix local north to the
+    parallel-transported tile-centre north, measured CCW in the
+    tangent plane.  For spin-2:
+
+        Q' =  Q cos(2 psi) - U sin(2 psi)
+        U' =  Q sin(2 psi) + U cos(2 psi)
+
+    transforms from the HEALPix pixel frame to the tile-centre frame.
+
+    The parallel transport is performed by rotating the centre's
+    north vector to each pixel along the great circle connecting
+    them.  The rotation is defined by:
+
+        axis  = normalize(vec_centre × vec_pixel)
+        angle = arccos(vec_centre · vec_pixel)
+
+    and is applied via the Rodrigues rotation formula, which is
+    equivalent to quaternion rotation but fully vectorisable.
+
+    Parameters
+    ----------
+    nside : int
+    face, tx, ty : int
+    tile_nside : int
+    ipix_tile : ndarray of int64 — NESTED pixel index at each tile position.
+
+    Returns
+    -------
+    psi : ndarray, same shape as ipix_tile — rotation angles in radians.
+    """
+    orig_shape = ipix_tile.shape
+    ipix_flat = ipix_tile.ravel()
+    n_pix = len(ipix_flat)
+
+    # --- Tile centre ---
+    ix_c = tx * tile_nside + tile_nside // 2
+    iy_c = ty * tile_nside + tile_nside // 2
+    ipix_center = hp.xyf2pix(nside, ix_c, iy_c, face, nest=True)
+    theta_c, phi_c = hp.pix2ang(nside, ipix_center, nest=True)
+    vec_center = np.array(hp.pix2vec(nside, ipix_center, nest=True))  # (3,)
+
+    # Local north at centre: shape (3,)
+    north_c = np.array(_local_north(theta_c, phi_c))
+
+    # --- All pixel positions: shape (n_pix, 3) ---
+    theta_p, phi_p = hp.pix2ang(nside, ipix_flat, nest=True)
+    vec_pixels = np.column_stack(hp.pix2vec(nside, ipix_flat, nest=True))
+
+    # Local north at each pixel: shape (n_pix, 3)
+    north_p = np.column_stack(_local_north(theta_p, phi_p))
+
+    # --- Great-circle rotation axis and angle ---
+    # axis = vec_center × vec_pixel  (n_pix, 3)
+    axis = np.cross(vec_center, vec_pixels)
+    axis_norm = np.linalg.norm(axis, axis=1, keepdims=True)  # (n_pix, 1)
+
+    # Mask for degenerate cases (coincident or antipodal pixels)
+    valid = (axis_norm.ravel() > 1e-15)
+
+    # Safe normalisation (avoid division by zero; degenerate entries
+    # will be overwritten with psi=0 later)
+    safe_norm = np.where(axis_norm > 1e-15, axis_norm, 1.0)
+    axis_hat = axis / safe_norm  # (n_pix, 3)
+
+    # Rotation angle
+    dot_cv = np.sum(vec_center * vec_pixels, axis=1)  # (n_pix,)
+    angle = np.arccos(np.clip(dot_cv, -1.0, 1.0))     # (n_pix,)
+
+    # --- Rodrigues rotation formula ---
+    # v_rot = v cos(a) + (k × v) sin(a) + k (k · v)(1 - cos(a))
+    # where v = north_c (broadcast), k = axis_hat, a = angle
+    cos_a = np.cos(angle)[:, np.newaxis]   # (n_pix, 1)
+    sin_a = np.sin(angle)[:, np.newaxis]   # (n_pix, 1)
+
+    north_c_broad = north_c[np.newaxis, :]  # (1, 3)
+
+    k_cross_v = np.cross(axis_hat, north_c_broad)  # (n_pix, 3)
+    k_dot_v = np.sum(axis_hat * north_c_broad, axis=1, keepdims=True)  # (n_pix, 1)
+
+    north_transported = (north_c_broad * cos_a
+                         + k_cross_v * sin_a
+                         + axis_hat * k_dot_v * (1.0 - cos_a))  # (n_pix, 3)
+
+    # --- Project onto tangent plane (remove radial component) ---
+    radial_comp = np.sum(north_transported * vec_pixels, axis=1,
+                         keepdims=True)  # (n_pix, 1)
+    north_transported -= radial_comp * vec_pixels
+
+    nt_norm = np.linalg.norm(north_transported, axis=1, keepdims=True)
+    safe_nt_norm = np.where(nt_norm > 1e-15, nt_norm, 1.0)
+    north_transported /= safe_nt_norm
+
+    # --- psi = angle from local north to transported north (CCW) ---
+    cos_psi = np.clip(
+        np.sum(north_p * north_transported, axis=1), -1.0, 1.0)
+    cross_nt = np.cross(north_p, north_transported)  # (n_pix, 3)
+    sin_psi = np.sum(cross_nt * vec_pixels, axis=1)
+    psi = np.arctan2(sin_psi, cos_psi)
+
+    # --- Zero out degenerate pixels and the centre pixel ---
+    psi[~valid] = 0.0
+    psi[ipix_flat == ipix_center] = 0.0
+
+    return psi.reshape(orig_shape)
+
+
+def _apply_spin2_rotation(Q, U, psi):
+    """
+    Rotate Q, U by angle psi (spin-2 rotation).
+
+        Q' =  Q cos(2 psi) - U sin(2 psi)
+        U' =  Q sin(2 psi) + U cos(2 psi)
+    """
+    c2 = np.cos(2.0 * psi)
+    s2 = np.sin(2.0 * psi)
+    Q_rot = Q * c2 - U * s2
+    U_rot = Q * s2 + U * c2
+    return Q_rot, U_rot
+
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+def _validate_inputs(nside, tile_nside, margin):
+    """Common validation for tiling parameters with exact margin unwrapping."""
+    npix = 12 * nside * nside
+    if not hp.isnpixok(npix):
+        raise ValueError(f"Invalid nside={nside}. Must be a power of 2.")
+    if nside % tile_nside != 0:
+        raise ValueError(f"nside ({nside}) must be an exact multiple of tile_nside ({tile_nside}).")
+    if margin >= nside:
+        raise ValueError(f"margin ({margin}) must be strictly less than nside ({nside}) to safely project.")
+    if not (nside > 0 and (nside & (nside - 1)) == 0):
+        raise ValueError(f"nside ({nside}) must be a power of 2.")
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=False):
+    """
+    Decompose a HEALPix map into overlapping square tiles, resolving
+    margin pixels via exact topological boundary unfolding. Any gaps in
+    the margins (topological singularities) are rebinned by averaging the 
+    ambiguous mappings. This acts directly on real pixel values (no interpolation).
+
+    Parameters
+    ----------
+    healpix_map : ndarray
+        If ``pol=False``: 1D array of length ``12 * nside**2``.
+        If ``pol=True``: shape ``(2, 12 * nside**2)`` where
+        ``[0]`` is Stokes Q and ``[1]`` is Stokes U.
+    nside : int
+        HEALPix resolution parameter (power of 2).
+    tile_nside : int
+        Interior side length of each tile. Must divide nside.
+    margin : int
+        Overlap border width. Must be < nside.
+    nested : bool
+        True if input is NESTED ordering.
+    pol : bool
+        If True, treat input as a spin-2 (Q, U) field and
+        parallel-transport to each tile centre's reference frame.
+
+    Returns
+    -------
+    tileset : TileSet
+    """
+    _validate_inputs(nside, tile_nside, margin)
+    npix = 12 * nside * nside
+
+    healpix_map = np.asarray(healpix_map, dtype=np.float64)
+
+    if pol:
+        if healpix_map.shape != (2, npix):
+            raise ValueError(f"For pol=True, map must have shape (2, {npix})")
+        if nested:
+            nested_q = healpix_map[0].copy()
+            nested_u = healpix_map[1].copy()
+        else:
+            nested_q = hp.reorder(healpix_map[0], r2n=True)
+            nested_u = hp.reorder(healpix_map[1], r2n=True)
+    else:
+        if healpix_map.shape != (npix,):
+            raise ValueError(f"For pol=False, map must have shape ({npix},)")
+        if nested:
+            nested_map = healpix_map.copy()
+        else:
+            nested_map = hp.reorder(healpix_map, r2n=True)
+
+    n_subtiles = nside // tile_nside
+    tile_full = tile_nside + 2 * margin
+    n_tiles = 12 * n_subtiles * n_subtiles
+
+    if pol:
+        data = np.empty((n_tiles, 2, tile_full, tile_full), dtype=np.float64)
+        psi_all = np.empty((n_tiles, tile_full, tile_full), dtype=np.float64)
+    else:
+        data = np.empty((n_tiles, tile_full, tile_full), dtype=np.float64)
+
+    tileset = TileSet(data, nside, tile_nside, margin, pol=pol)
+
+    i_arr = np.arange(tile_full)
+    II, JJ = np.meshgrid(i_arr, i_arr, indexing="xy")
+
+    idx = 0
+    for face in range(12):
+        for tx in range(n_subtiles):
+            for ty in range(n_subtiles):
+                x0 = tx * tile_nside
+                y0 = ty * tile_nside
+                IX = x0 + II - margin
+                IY = y0 + JJ - margin
+
+                f_xy, x_xy, y_xy = _unwrap_grid_vec(face, IX, IY, nside, 'xy')
+                f_yx, x_yx, y_yx = _unwrap_grid_vec(face, IX, IY, nside, 'yx')
+
+                ipix_xy = hp.xyf2pix(nside, x_xy, y_xy, f_xy, nest=True)
+                ipix_yx = hp.xyf2pix(nside, x_yx, y_yx, f_yx, nest=True)
+
+                if pol:
+                    psi_xy = _compute_psi(nside, face, tx, ty, tile_nside, ipix_xy)
+                    psi_yx = _compute_psi(nside, face, tx, ty, tile_nside, ipix_yx)
+
+                    q_xy, u_xy = _apply_spin2_rotation(nested_q[ipix_xy], nested_u[ipix_xy], psi_xy)
+                    q_yx, u_yx = _apply_spin2_rotation(nested_q[ipix_yx], nested_u[ipix_yx], psi_yx)
+
+                    data[idx, 0] = 0.5 * (q_xy + q_yx)
+                    data[idx, 1] = 0.5 * (u_xy + u_yx)
+                    
+                    psi_all[idx] = psi_xy 
+                else:
+                    val_xy = nested_map[ipix_xy]
+                    val_yx = nested_map[ipix_yx]
+                    data[idx] = 0.5 * (val_xy + val_yx)
+
+                idx += 1
+
+    if pol:
+        tileset.psi = psi_all
+
+    return tileset
+
+
+def tiles2healpix(tileset, nested=False):
+    """
+    Reconstruct a HEALPix map from a TileSet.
+
+    Only interior pixels are used; overlap borders are discarded.
+    For scalar maps, the round-trip is lossless.
+    For polarisation maps, the inverse spin-2 rotation is applied
+    to transform Q and U back from the tile-centre frame to the
+    HEALPix pixel frame.
+
+    Parameters
+    ----------
+    tileset : TileSet
+    nested : bool
+        If True, output is NESTED ordering.
+
+    Returns
+    -------
+    healpix_map : ndarray
+        If ``tileset.pol is False``: 1D array of length ``12*nside**2``.
+        If ``tileset.pol is True``: shape ``(2, 12*nside**2)``.
+    """
+    nside = tileset.nside
+    tile_nside = tileset.tile_nside
+    margin = tileset.margin
+    npix = 12 * nside * nside
+
+    if tileset.pol:
+        nested_q = np.zeros(npix, dtype=tileset.data.dtype)
+        nested_u = np.zeros(npix, dtype=tileset.data.dtype)
+
+        for face, tx, ty, tile_data in tileset.iter_tiles():
+            idx = tileset.tile_index(face, tx, ty)
+            m = margin
+            s = tile_nside
+
+            q_interior = tile_data[0, m: m + s, m: m + s]
+            u_interior = tile_data[1, m: m + s, m: m + s]
+            psi_interior = tileset.psi[idx, m: m + s, m: m + s]
+
+            # Inverse rotation: negate psi
+            q_orig, u_orig = _apply_spin2_rotation(
+                q_interior, u_interior, -psi_interior)
+
+            ix_arr = np.arange(tx * tile_nside,
+                               (tx + 1) * tile_nside, dtype=np.int64)
+            iy_arr = np.arange(ty * tile_nside,
+                               (ty + 1) * tile_nside, dtype=np.int64)
+            IX, IY = np.meshgrid(ix_arr, iy_arr, indexing="xy")
+
+            face_arr = np.full(IX.size, face, dtype=np.int64)
+            ipix = hp.xyf2pix(nside, IX.ravel(), IY.ravel(),
+                              face_arr, nest=True)
+
+            nested_q[ipix] = q_orig.ravel()
+            nested_u[ipix] = u_orig.ravel()
+
+        if nested:
+            return np.stack([nested_q, nested_u], axis=0)
+        else:
+            return np.stack([hp.reorder(nested_q, n2r=True),
+                             hp.reorder(nested_u, n2r=True)], axis=0)
+
+    else:
+        nested_map = np.zeros(npix, dtype=tileset.data.dtype)
+
+        for face, tx, ty, tile_data in tileset.iter_tiles():
+            m = margin
+            s = tile_nside
+
+            interior = tile_data[m: m + s, m: m + s]
+
+            ix_arr = np.arange(tx * tile_nside,
+                               (tx + 1) * tile_nside, dtype=np.int64)
+            iy_arr = np.arange(ty * tile_nside,
+                               (ty + 1) * tile_nside, dtype=np.int64)
+            IX, IY = np.meshgrid(ix_arr, iy_arr, indexing="xy")
+
+            face_arr = np.full(IX.size, face, dtype=np.int64)
+            ipix = hp.xyf2pix(nside, IX.ravel(), IY.ravel(),
+                              face_arr, nest=True)
+
+            nested_map[ipix] = interior.ravel()
+
+        if nested:
+            return nested_map
+        else:
+            return hp.reorder(nested_map, n2r=True)
