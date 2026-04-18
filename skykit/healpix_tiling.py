@@ -18,7 +18,7 @@ import healpy as hp
 import jax
 import jax.numpy as jnp
 
-from tileset import TileSet
+from .tileset import TileSet
 
 # ---------------------------------------------------------------------------
 # Exact Topological unwrapping (JAX)

@@ -115,7 +115,7 @@ def apply_apodization(tileset, taper_width=None, taper_type='cosine', inplace=Fa
             tileset.data *= window[np.newaxis, :, :]
         return tileset
     else:
-        from tileset import TileSet
+        from .tileset import TileSet
         new_data = tileset.data.copy()
         
         if tileset.pol:

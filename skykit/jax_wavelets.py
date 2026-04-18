@@ -109,7 +109,7 @@ def bump_2d(M, N, sigma, theta, xi, slant=0.5):
     val = val * jnp.exp(1.0)
     return jnp.where(mask, val, 0.0)
 
-def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8, xi0=3.14/4.0, slant=0.5):
+def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8, xi0=np.pi/4.0, slant=0.5):
     """
     Generate a complete filter bank (wavelets and low-pass) for 2D scattering.
     

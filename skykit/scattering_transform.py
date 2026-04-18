@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
-from jax_wavelets import generate_filter_bank
+import numpy as np
+from .jax_wavelets import generate_filter_bank
 
 class Scattering2D:
     """
@@ -44,7 +45,6 @@ class Scattering2D:
         # Precompile and format the filter arrays for vectorised application
         # Stack all psi filters into a single tensor of shape (N_psi, M, N)
         self.psi_vals = jnp.stack([f['val'] for f in self.filters['psi']])
-        import numpy as np
         # Ensure primitive Python ints are used so jax.jit doesn't trace the mask indices
         self.psi_j = np.array([int(f['j']) for f in self.filters['psi']])
         
@@ -75,7 +75,7 @@ class Scattering2D:
         
         # Order 0: x * phi
         S0_f = x_f * self.phi_val[jnp.newaxis, :, :]
-        S0 = jnp.abs(jnp.fft.ifft2(S0_f))
+        S0 = jnp.real(jnp.fft.ifft2(S0_f))
         
         out = {'S0': S0}
         
@@ -88,7 +88,7 @@ class Scattering2D:
             # S1 = U1 * phi
             U1_f_new = jnp.fft.fft2(U1)
             S1_f = U1_f_new * self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
-            S1 = jnp.abs(jnp.fft.ifft2(S1_f))
+            S1 = jnp.real(jnp.fft.ifft2(S1_f))
             out['S1'] = S1
             
             if self.max_order >= 2:
@@ -101,7 +101,6 @@ class Scattering2D:
                     u1_f_curr = U1_f_new[:, i1, :, :]
                     
                     # Valid j2 range is j2 > j1
-                    import numpy as np
                     valid_mask = self.psi_j > self.psi_j[i1]
                     
                     if not np.any(valid_mask):
@@ -118,7 +117,7 @@ class Scattering2D:
                     # S2 = U2 * phi
                     U2_f_new = jnp.fft.fft2(U2)
                     s2_f = U2_f_new * self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
-                    s2 = jnp.abs(jnp.fft.ifft2(s2_f))
+                    s2 = jnp.real(jnp.fft.ifft2(s2_f))
                     S2_list.append(s2)
                     
                 if len(S2_list) > 0:
