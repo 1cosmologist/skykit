@@ -10,3 +10,9 @@ project(
 py = import('python').find_installation(pure: true)
 
 subdir('skykit')
+
+test('python-unittests', py,
+  args: ['-m', 'unittest', 'discover', '-s', 'tests', '-v'],
+  workdir: meson.project_source_root()
+)
+
