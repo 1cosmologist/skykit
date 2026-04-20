@@ -26,36 +26,60 @@ from .tileset import TileSet
 
 @jax.jit
 def _resolve_x_jax(f, x, y, nside):
+    """
+    Resolve HEALPix face boundaries when the x-coordinate overflows or underflows.
+    """
+    # Initialize the new coordinates and face arrays
     f_new, x_new, y_new = f, x, y
     
+    # --- Positive X overflow (x >= nside) ---
+    # Create mask for pixels that overflow on the right
     m_xg = x >= nside
-    m_xg_f0 = m_xg & (f < 4)
-    m_xg_f4 = m_xg & (f >= 4) & (f < 8)
-    m_xg_f8 = m_xg & (f >= 8)
+    # Sub-masks for the specific 3 horizontal rings of HEALPix faces
+    m_xg_f0 = m_xg & (f < 4)               # North polar faces (0, 1, 2, 3)
+    m_xg_f4 = m_xg & (f >= 4) & (f < 8)    # Equatorial faces (4, 5, 6, 7)
+    m_xg_f8 = m_xg & (f >= 8)              # South polar faces (8, 9, 10, 11)
     
+    # For north polar faces, an overflow in +x wraps around the top cap radially.
+    # We move to the adjacent face clockwise (f + 1 mod 4).
+    # The local x,y coordinates rotate by 90 degrees.
     f_new = jnp.where(m_xg_f0, (f + 1) % 4, f_new)
     y_new = jnp.where(m_xg_f0, 2*nside - 1 - x, y_new)
     x_new = jnp.where(m_xg_f0, y, x_new)
     
+    # For equatorial faces, an overflow in +x spills directly up into the north 
+    # polar face immediately above it (face index - 4). The x-coord wraps to 0.
     f_new = jnp.where(m_xg_f4, f - 4, f_new)
     x_new = jnp.where(m_xg_f4, x - nside, x_new)
     
+    # For south polar faces, an overflow in +x spills upward into the equatorial band.
+    # Due to the staggered face arrangement, face 8 goes to 5, 9 to 6, etc.
     map_f8_xg = jnp.array([0,1,2,3,4,5,6,7,5,6,7,4])
     f_new = jnp.where(m_xg_f8, map_f8_xg[f], f_new)
     x_new = jnp.where(m_xg_f8, x - nside, x_new)
     
+    # --- Negative X underflow (x < 0) ---
+    # Create mask for pixels that underflow on the left
     m_xl = (x < 0) & (~m_xg) 
-    m_xl_f0 = m_xl & (f < 4)
-    m_xl_f4 = m_xl & (f >= 4) & (f < 8)
-    m_xl_f8 = m_xl & (f >= 8)
+    # Sub-masks for the specific 3 horizontal rings of HEALPix faces
+    m_xl_f0 = m_xl & (f < 4)               # North polar faces
+    m_xl_f4 = m_xl & (f >= 4) & (f < 8)    # Equatorial faces
+    m_xl_f8 = m_xl & (f >= 8)              # South polar faces
     
+    # For north polar faces, an underflow in -x spills straight downward into 
+    # the equatorial face immediately below it (face index + 4).
     f_new = jnp.where(m_xl_f0, f + 4, f_new)
     x_new = jnp.where(m_xl_f0, x + nside, x_new)
     
+    # For equatorial faces, an underflow in -x spills downward into the south 
+    # polar band. Due to face staggering, face 4 goes to 11, 5 to 8, etc.
     map_f4_xl = jnp.array([0,1,2,3,11,8,9,10,0,0,0,0])
     f_new = jnp.where(m_xl_f4, map_f4_xl[f], f_new)
     x_new = jnp.where(m_xl_f4, x + nside, x_new)
     
+    # For south polar faces, an underflow in -x wraps around the interior of the 
+    # bottom cap. We move to the adjacent face counter-clockwise.
+    # The local x,y coordinates rotate by -90 degrees.
     map_f8_xl = jnp.array([0,0,0,0,0,0,0,0,11,8,9,10])
     f_new = jnp.where(m_xl_f8, map_f8_xl[f], f_new)
     y_new = jnp.where(m_xl_f8, -1 - x, y_new)
@@ -65,36 +89,60 @@ def _resolve_x_jax(f, x, y, nside):
 
 @jax.jit
 def _resolve_y_jax(f, x, y, nside):
+    """
+    Resolve HEALPix face boundaries when the y-coordinate overflows or underflows.
+    """
+    # Initialize the new coordinates and face arrays
     f_new, x_new, y_new = f, x, y
     
+    # --- Positive Y overflow (y >= nside) ---
+    # Create mask for pixels that overflow upward
     m_yg = y >= nside
-    m_yg_f0 = m_yg & (f < 4)
-    m_yg_f4 = m_yg & (f >= 4) & (f < 8)
-    m_yg_f8 = m_yg & (f >= 8)
+    # Sub-masks for the specific 3 horizontal rings of HEALPix faces
+    m_yg_f0 = m_yg & (f < 4)               # North polar faces (0, 1, 2, 3)
+    m_yg_f4 = m_yg & (f >= 4) & (f < 8)    # Equatorial faces (4, 5, 6, 7)
+    m_yg_f8 = m_yg & (f >= 8)              # South polar faces (8, 9, 10, 11)
     
+    # For north polar faces, an overflow in +y wraps around the top cap radially.
+    # We move to the adjacent face counter-clockwise (f - 1 mod 4).
+    # The local x,y coordinates rotate by -90 degrees.
     f_new = jnp.where(m_yg_f0, (f - 1) % 4, f_new)
     x_new = jnp.where(m_yg_f0, 2*nside - 1 - y, x_new)
     y_new = jnp.where(m_yg_f0, x, y_new)
     
+    # For equatorial faces, an overflow in +y spills upward into the north 
+    # polar band. Due to face staggering, face 4 goes to 3, 5 to 0, etc.
     map_f4_yg = jnp.array([0,1,2,3,3,0,1,2,0,0,0,0])
     f_new = jnp.where(m_yg_f4, map_f4_yg[f], f_new)
     y_new = jnp.where(m_yg_f4, y - nside, y_new)
     
+    # For south polar faces, an overflow in +y spills right up into the equatorial 
+    # face immediately above it (face index - 4). The y-coord wraps to 0.
     f_new = jnp.where(m_yg_f8, f - 4, f_new)
     y_new = jnp.where(m_yg_f8, y - nside, y_new)
     
+    # --- Negative Y underflow (y < 0) ---
+    # Create mask for pixels that underflow downward
     m_yl = (y < 0) & (~m_yg)
-    m_yl_f0 = m_yl & (f < 4)
-    m_yl_f4 = m_yl & (f >= 4) & (f < 8)
-    m_yl_f8 = m_yl & (f >= 8)
+    # Sub-masks for the specific 3 horizontal rings of HEALPix faces
+    m_yl_f0 = m_yl & (f < 4)               # North polar faces
+    m_yl_f4 = m_yl & (f >= 4) & (f < 8)    # Equatorial faces
+    m_yl_f8 = m_yl & (f >= 8)              # South polar faces
     
+    # For north polar faces, an underflow in -y spills completely down into the 
+    # equatorial band. Due to the staggering, face 0 goes to 5, 1 to 6, etc.
     map_f0_yl = jnp.array([5,6,7,4,0,0,0,0,0,0,0,0])
     f_new = jnp.where(m_yl_f0, map_f0_yl[f], f_new)
     y_new = jnp.where(m_yl_f0, y + nside, y_new)
     
+    # For equatorial faces, an underflow in -y spills straight downward into 
+    # the south polar face immediately below it (face index + 4).
     f_new = jnp.where(m_yl_f4, f + 4, f_new)
     y_new = jnp.where(m_yl_f4, y + nside, y_new)
     
+    # For south polar faces, an underflow in -y wraps around the interior of the 
+    # bottom cap. We move to the adjacent face clockwise.
+    # The local x,y coordinates rotate by +90 degrees.
     map_f8_yl = jnp.array([0,0,0,0,0,0,0,0,9,10,11,8])
     f_new = jnp.where(m_yl_f8, map_f8_yl[f], f_new)
     x_new = jnp.where(m_yl_f8, -1 - y, x_new)
