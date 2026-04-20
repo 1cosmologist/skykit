@@ -99,12 +99,11 @@ def bump_2d(M, N, sigma, theta, xi, slant=0.5):
     v_rot = -u * jnp.sin(theta) + v * jnp.cos(theta)
     
     dist = ((u_rot - xi)**2 + (v_rot / slant)**2) / sigma**2
-    # Bump function: exp(1 / (dist^2 - 1)) if dist < 1 else 0
+    # dist = d^2 (squared normalised distance). Bump: exp(1 / (d^2 - 1)) for d^2 < 1
     mask = dist < 1.0
-    # Add a small epsilon to avoid division by zero in the invalid region 
-    # (mask will zero it out anyway)
+    # Replace out-of-support values with 0 to avoid division by zero
     dist_safe = jnp.where(mask, dist, 0.0)
-    val = jnp.exp(1.0 / (dist_safe**2 - 1.0))
+    val = jnp.exp(1.0 / (dist_safe - 1.0))
     # Normalize to peak at 1
     val = val * jnp.exp(1.0)
     return jnp.where(mask, val, 0.0)
