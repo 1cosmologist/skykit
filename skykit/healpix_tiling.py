@@ -186,7 +186,7 @@ def _compute_psi(nside, face, tx, ty, tile_nside, ipix_tile):
     north vector to each pixel along the great circle connecting
     them.  The rotation is defined by:
 
-        axis  = normalize(vec_centre × vec_pixel)
+        axis  = normalize(vec_centre x vec_pixel)
         angle = arccos(vec_centre · vec_pixel)
 
     and is applied via the Rodrigues rotation formula, which is
@@ -317,6 +317,165 @@ def _validate_inputs(nside, tile_nside, margin):
 # Public API
 # ---------------------------------------------------------------------------
 
+class HealpixTileProjector:
+    """
+    Pre-computes and caches pixel mappings and polarization rotation angles
+    for HEALPix map and TileSet transformations.
+
+    Use this class to transform multiple maps with the same geometry
+    to avoid recalculating coordinates and rotation angles.
+    """
+    def __init__(self, nside, tile_nside, margin, pol=False):
+        _validate_inputs(nside, tile_nside, margin)
+        self.nside = nside
+        self.tile_nside = tile_nside
+        self.margin = margin
+        self.pol = pol
+        
+        self.n_subtiles = nside // tile_nside
+        self.tile_full = tile_nside + 2 * margin
+        self.n_tiles = 12 * self.n_subtiles * self.n_subtiles
+        
+        # Pre-allocate arrays
+        shape = (self.n_tiles, self.tile_full, self.tile_full)
+        self.ipix_xy = np.empty(shape, dtype=np.int64)
+        self.ipix_yx = np.empty(shape, dtype=np.int64)
+        
+        if self.pol:
+            self.psi_xy = np.empty(shape, dtype=np.float64)
+            self.psi_yx = np.empty(shape, dtype=np.float64)
+            
+        interior_shape = (self.n_tiles, self.tile_nside, self.tile_nside)
+        self.ipix_interior = np.empty(interior_shape, dtype=np.int64)
+        if self.pol:
+            self.psi_interior = np.empty(interior_shape, dtype=np.float64)
+
+        i_arr = np.arange(self.tile_full)
+        II, JJ = np.meshgrid(i_arr, i_arr, indexing="xy")
+
+        idx = 0
+        for face in range(12):
+            for tx in range(self.n_subtiles):
+                for ty in range(self.n_subtiles):
+                    x0 = tx * tile_nside
+                    y0 = ty * tile_nside
+                    
+                    # Full tile mapping
+                    IX = x0 + II - margin
+                    IY = y0 + JJ - margin
+
+                    f_xy, x_xy, y_xy = _unwrap_grid_vec(face, IX, IY, nside, 'xy')
+                    f_yx, x_yx, y_yx = _unwrap_grid_vec(face, IX, IY, nside, 'yx')
+
+                    ipix_xy = hp.xyf2pix(nside, x_xy, y_xy, f_xy, nest=True)
+                    ipix_yx = hp.xyf2pix(nside, x_yx, y_yx, f_yx, nest=True)
+
+                    self.ipix_xy[idx] = ipix_xy
+                    self.ipix_yx[idx] = ipix_yx
+
+                    if self.pol:
+                        psi_xy = _compute_psi(nside, face, tx, ty, tile_nside, ipix_xy)
+                        psi_yx = _compute_psi(nside, face, tx, ty, tile_nside, ipix_yx)
+                        self.psi_xy[idx] = psi_xy
+                        self.psi_yx[idx] = psi_yx
+                        
+                    # Interior tile mapping (for tiles2map)
+                    m = margin
+                    s = tile_nside
+                    ix_arr = np.arange(tx * tile_nside, (tx + 1) * tile_nside, dtype=np.int64)
+                    iy_arr = np.arange(ty * tile_nside, (ty + 1) * tile_nside, dtype=np.int64)
+                    IX_int, IY_int = np.meshgrid(ix_arr, iy_arr, indexing="xy")
+
+                    face_arr = np.full(IX_int.size, face, dtype=np.int64)
+                    ipix_int = hp.xyf2pix(nside, IX_int.ravel(), IY_int.ravel(), face_arr, nest=True)
+                    self.ipix_interior[idx] = ipix_int.reshape((s, s))
+                    
+                    if self.pol:
+                        self.psi_interior[idx] = self.psi_xy[idx, m: m + s, m: m + s]
+
+                    idx += 1
+
+    def map2tiles(self, healpix_map, nested=False):
+        """
+        Decompose a HEALPix map into overlapping square tiles.
+        """
+        npix = 12 * self.nside * self.nside
+        healpix_map = np.asarray(healpix_map, dtype=np.float64)
+
+        if self.pol:
+            if healpix_map.shape != (2, npix):
+                raise ValueError(f"For pol=True, map must have shape (2, {npix})")
+            if nested:
+                nested_q = healpix_map[0]
+                nested_u = healpix_map[1]
+            else:
+                nested_q = hp.reorder(healpix_map[0], r2n=True)
+                nested_u = hp.reorder(healpix_map[1], r2n=True)
+                
+            data = np.empty((self.n_tiles, 2, self.tile_full, self.tile_full), dtype=np.float64)
+            
+            # Vectorised assignment over precomputed indices
+            q_xy, u_xy = _apply_spin2_rotation(nested_q[self.ipix_xy], nested_u[self.ipix_xy], self.psi_xy)
+            q_yx, u_yx = _apply_spin2_rotation(nested_q[self.ipix_yx], nested_u[self.ipix_yx], self.psi_yx)
+            
+            data[:, 0] = 0.5 * (q_xy + q_yx)
+            data[:, 1] = 0.5 * (u_xy + u_yx)
+            
+            tileset = TileSet(data, self.nside, self.tile_nside, self.margin, pol=self.pol)
+            return tileset
+
+        else:
+            if healpix_map.shape != (npix,):
+                raise ValueError(f"For pol=False, map must have shape ({npix},)")
+            if nested:
+                nested_map = healpix_map
+            else:
+                nested_map = hp.reorder(healpix_map, r2n=True)
+                
+            val_xy = nested_map[self.ipix_xy]
+            val_yx = nested_map[self.ipix_yx]
+            data = 0.5 * (val_xy + val_yx)
+            
+            return TileSet(data, self.nside, self.tile_nside, self.margin, pol=self.pol)
+
+    def tiles2map(self, tileset, nested=False):
+        """
+        Reconstruct a HEALPix map from a TileSet.
+        """
+        npix = 12 * self.nside * self.nside
+        m = self.margin
+        s = self.tile_nside
+
+        if self.pol:
+            nested_q = np.zeros(npix, dtype=tileset.data.dtype)
+            nested_u = np.zeros(npix, dtype=tileset.data.dtype)
+            
+            q_interior = tileset.data[:, 0, m: m + s, m: m + s]
+            u_interior = tileset.data[:, 1, m: m + s, m: m + s]
+            
+            q_orig, u_orig = _apply_spin2_rotation(q_interior, u_interior, -self.psi_interior)
+            
+            # Strict guarantee that tile interiors are exact HEALPix partitions (mutually exclusive pixels)
+            nested_q[self.ipix_interior.ravel()] = q_orig.ravel()
+            nested_u[self.ipix_interior.ravel()] = u_orig.ravel()
+
+            if nested:
+                return np.stack([nested_q, nested_u], axis=0)
+            else:
+                return np.stack([hp.reorder(nested_q, n2r=True), hp.reorder(nested_u, n2r=True)], axis=0)
+
+        else:
+            nested_map = np.zeros(npix, dtype=tileset.data.dtype)
+            interior = tileset.data[:, m: m + s, m: m + s]
+            
+            nested_map[self.ipix_interior.ravel()] = interior.ravel()
+
+            if nested:
+                return nested_map
+            else:
+                return hp.reorder(nested_map, n2r=True)
+
+
 def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=False):
     """
     Decompose a HEALPix map into overlapping square tiles, resolving
@@ -346,80 +505,8 @@ def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=Fals
     -------
     tileset : TileSet
     """
-    _validate_inputs(nside, tile_nside, margin)
-    npix = 12 * nside * nside
-
-    healpix_map = np.asarray(healpix_map, dtype=np.float64)
-
-    if pol:
-        if healpix_map.shape != (2, npix):
-            raise ValueError(f"For pol=True, map must have shape (2, {npix})")
-        if nested:
-            nested_q = healpix_map[0].copy()
-            nested_u = healpix_map[1].copy()
-        else:
-            nested_q = hp.reorder(healpix_map[0], r2n=True)
-            nested_u = hp.reorder(healpix_map[1], r2n=True)
-    else:
-        if healpix_map.shape != (npix,):
-            raise ValueError(f"For pol=False, map must have shape ({npix},)")
-        if nested:
-            nested_map = healpix_map.copy()
-        else:
-            nested_map = hp.reorder(healpix_map, r2n=True)
-
-    n_subtiles = nside // tile_nside
-    tile_full = tile_nside + 2 * margin
-    n_tiles = 12 * n_subtiles * n_subtiles
-
-    if pol:
-        data = np.empty((n_tiles, 2, tile_full, tile_full), dtype=np.float64)
-        psi_all = np.empty((n_tiles, tile_full, tile_full), dtype=np.float64)
-    else:
-        data = np.empty((n_tiles, tile_full, tile_full), dtype=np.float64)
-
-    tileset = TileSet(data, nside, tile_nside, margin, pol=pol)
-
-    i_arr = np.arange(tile_full)
-    II, JJ = np.meshgrid(i_arr, i_arr, indexing="xy")
-
-    idx = 0
-    for face in range(12):
-        for tx in range(n_subtiles):
-            for ty in range(n_subtiles):
-                x0 = tx * tile_nside
-                y0 = ty * tile_nside
-                IX = x0 + II - margin
-                IY = y0 + JJ - margin
-
-                f_xy, x_xy, y_xy = _unwrap_grid_vec(face, IX, IY, nside, 'xy')
-                f_yx, x_yx, y_yx = _unwrap_grid_vec(face, IX, IY, nside, 'yx')
-
-                ipix_xy = hp.xyf2pix(nside, x_xy, y_xy, f_xy, nest=True)
-                ipix_yx = hp.xyf2pix(nside, x_yx, y_yx, f_yx, nest=True)
-
-                if pol:
-                    psi_xy = _compute_psi(nside, face, tx, ty, tile_nside, ipix_xy)
-                    psi_yx = _compute_psi(nside, face, tx, ty, tile_nside, ipix_yx)
-
-                    q_xy, u_xy = _apply_spin2_rotation(nested_q[ipix_xy], nested_u[ipix_xy], psi_xy)
-                    q_yx, u_yx = _apply_spin2_rotation(nested_q[ipix_yx], nested_u[ipix_yx], psi_yx)
-
-                    data[idx, 0] = 0.5 * (q_xy + q_yx)
-                    data[idx, 1] = 0.5 * (u_xy + u_yx)
-                    
-                    psi_all[idx] = psi_xy 
-                else:
-                    val_xy = nested_map[ipix_xy]
-                    val_yx = nested_map[ipix_yx]
-                    data[idx] = 0.5 * (val_xy + val_yx)
-
-                idx += 1
-
-    if pol:
-        tileset.psi = psi_all
-
-    return tileset
+    projector = HealpixTileProjector(nside, tile_nside, margin, pol=pol)
+    return projector.map2tiles(healpix_map, nested=nested)
 
 
 def tiles2healpix(tileset, nested=False):
@@ -444,69 +531,5 @@ def tiles2healpix(tileset, nested=False):
         If ``tileset.pol is False``: 1D array of length ``12*nside**2``.
         If ``tileset.pol is True``: shape ``(2, 12*nside**2)``.
     """
-    nside = tileset.nside
-    tile_nside = tileset.tile_nside
-    margin = tileset.margin
-    npix = 12 * nside * nside
-
-    if tileset.pol:
-        nested_q = np.zeros(npix, dtype=tileset.data.dtype)
-        nested_u = np.zeros(npix, dtype=tileset.data.dtype)
-
-        for face, tx, ty, tile_data in tileset.iter_tiles():
-            idx = tileset.tile_index(face, tx, ty)
-            m = margin
-            s = tile_nside
-
-            q_interior = tile_data[0, m: m + s, m: m + s]
-            u_interior = tile_data[1, m: m + s, m: m + s]
-            psi_interior = tileset.psi[idx, m: m + s, m: m + s]
-
-            # Inverse rotation: negate psi
-            q_orig, u_orig = _apply_spin2_rotation(
-                q_interior, u_interior, -psi_interior)
-
-            ix_arr = np.arange(tx * tile_nside,
-                               (tx + 1) * tile_nside, dtype=np.int64)
-            iy_arr = np.arange(ty * tile_nside,
-                               (ty + 1) * tile_nside, dtype=np.int64)
-            IX, IY = np.meshgrid(ix_arr, iy_arr, indexing="xy")
-
-            face_arr = np.full(IX.size, face, dtype=np.int64)
-            ipix = hp.xyf2pix(nside, IX.ravel(), IY.ravel(),
-                              face_arr, nest=True)
-
-            nested_q[ipix] = q_orig.ravel()
-            nested_u[ipix] = u_orig.ravel()
-
-        if nested:
-            return np.stack([nested_q, nested_u], axis=0)
-        else:
-            return np.stack([hp.reorder(nested_q, n2r=True),
-                             hp.reorder(nested_u, n2r=True)], axis=0)
-
-    else:
-        nested_map = np.zeros(npix, dtype=tileset.data.dtype)
-
-        for face, tx, ty, tile_data in tileset.iter_tiles():
-            m = margin
-            s = tile_nside
-
-            interior = tile_data[m: m + s, m: m + s]
-
-            ix_arr = np.arange(tx * tile_nside,
-                               (tx + 1) * tile_nside, dtype=np.int64)
-            iy_arr = np.arange(ty * tile_nside,
-                               (ty + 1) * tile_nside, dtype=np.int64)
-            IX, IY = np.meshgrid(ix_arr, iy_arr, indexing="xy")
-
-            face_arr = np.full(IX.size, face, dtype=np.int64)
-            ipix = hp.xyf2pix(nside, IX.ravel(), IY.ravel(),
-                              face_arr, nest=True)
-
-            nested_map[ipix] = interior.ravel()
-
-        if nested:
-            return nested_map
-        else:
-            return hp.reorder(nested_map, n2r=True)
+    projector = HealpixTileProjector(tileset.nside, tileset.tile_nside, tileset.margin, pol=tileset.pol)
+    return projector.tiles2map(tileset, nested=nested)

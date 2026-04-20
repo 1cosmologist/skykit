@@ -14,19 +14,14 @@ class TileSet:
         If scalar: shape ``(n_tiles, tile_full, tile_full)``.
         If pol: shape ``(n_tiles, 2, tile_full, tile_full)`` where
         axis 1 is [Q, U] in the tile-centre frame.
-    psi : ndarray or None
-        If pol: shape ``(n_tiles, tile_full, tile_full)``, rotation
-        angles (radians) used for parallel transport.  Stored for
-        inverse transport during reconstruction.  None if scalar.
     pol : bool
         Whether this TileSet holds polarisation data.
     nside, tile_nside, margin : int
     n_subtiles, n_tiles, tile_full : int
     """
 
-    def __init__(self, data, nside, tile_nside, margin, pol=False, psi=None):
+    def __init__(self, data, nside, tile_nside, margin, pol=False):
         self.data = data
-        self.psi = psi
         self.pol = pol
         self.nside = nside
         self.tile_nside = tile_nside

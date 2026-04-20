@@ -1,4 +1,5 @@
 import numpy as np
+import h5py
 
 def create_apodization_window(tile_nside, margin, taper_width=None, taper_type='cosine'):
     """
@@ -125,9 +126,63 @@ def apply_apodization(tileset, taper_width=None, taper_type='cosine', inplace=Fa
             
         new_tileset = TileSet(new_data, tileset.nside, tileset.tile_nside, 
                               tileset.margin, pol=tileset.pol)
-        
-        if tileset.pol and hasattr(tileset, 'psi'):
-            new_tileset.psi = tileset.psi.copy()
             
         return new_tileset
+
+def write_tileset_hdf5(tileset, filepath):
+    """
+    Write a TileSet and its key metadata to an HDF5 file.
+    
+    Parameters
+    ----------
+    tileset : TileSet
+        The TileSet object to serialize.
+    filepath : str
+        Path of the destination HDF5 file.
+    """
+    with h5py.File(filepath, 'w') as f:
+        # Store metadata attributes
+        f.attrs['nside'] = tileset.nside
+        f.attrs['tile_nside'] = tileset.tile_nside
+        f.attrs['margin'] = tileset.margin
+        f.attrs['pol'] = tileset.pol
+        
+        # Store main data array
+        f.create_dataset('data', data=tileset.data)
+
+def read_tileset_hdf5(filepath):
+    """
+    Read a TileSet efficiently from an HDF5 file, verifying all class metadata.
+    
+    Parameters
+    ----------
+    filepath : str
+        Path of the source HDF5 file.
+        
+    Returns
+    -------
+    TileSet
+        A correctly initialized TileSet object recovering the saved metadata.
+    """
+    from .tileset import TileSet
+    
+    with h5py.File(filepath, 'r') as f:
+        # Prevent silent extraction errors by strictly checking metadata
+        required_attrs = ['nside', 'tile_nside', 'margin', 'pol']
+        for attr in required_attrs:
+            if attr not in f.attrs:
+                raise ValueError(f"HDF5 file '{filepath}' is missing the required '{attr}' metadata.")
+                
+        nside = int(f.attrs['nside'])
+        tile_nside = int(f.attrs['tile_nside'])
+        margin = int(f.attrs['margin'])
+        pol = bool(f.attrs['pol'])
+        
+        if 'data' not in f:
+            raise ValueError(f"HDF5 file '{filepath}' does not contain the core 'data' dataset.")
+            
+        # Extract data explicitly into memory
+        data = f['data'][:]
+                
+        return TileSet(data, nside, tile_nside, margin, pol=pol)
 

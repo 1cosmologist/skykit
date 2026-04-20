@@ -15,5 +15,6 @@ requires-python = ">=3.8"
 dependencies = [
     "numpy",
     "jax",
-    "jaxlib"
+    "jaxlib",
+    "h5py"
 ]
