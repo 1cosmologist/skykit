@@ -174,10 +174,11 @@ def _compute_psi(nside, face, tx, ty, tile_nside, ipix_tile):
 
     psi is the angle from the pixel's HEALPix local north to the
     parallel-transported tile-centre north, measured CCW in the
-    tangent plane.  For spin-2:
+    tangent plane.  For a spin-2 field Q + iU, a CCW frame rotation
+    by psi transforms as Q' + iU' = (Q + iU) * exp(-2i*psi), giving:
 
-        Q' =  Q cos(2 psi) - U sin(2 psi)
-        U' =  Q sin(2 psi) + U cos(2 psi)
+        Q' =  Q cos(2 psi) + U sin(2 psi)
+        U' = -Q sin(2 psi) + U cos(2 psi)
 
     transforms from the HEALPix pixel frame to the tile-centre frame.
 
@@ -280,15 +281,18 @@ def _compute_psi(nside, face, tx, ty, tile_nside, ipix_tile):
 
 def _apply_spin2_rotation(Q, U, psi):
     """
-    Rotate Q, U by angle psi (spin-2 rotation).
+    Rotate Q, U by frame rotation angle psi (spin-2 convention).
 
-        Q' =  Q cos(2 psi) - U sin(2 psi)
-        U' =  Q sin(2 psi) + U cos(2 psi)
+    For a CCW frame rotation by psi, a spin-2 field transforms as
+    Q' + iU' = (Q + iU) * exp(-2i*psi):
+
+        Q' =  Q cos(2 psi) + U sin(2 psi)
+        U' = -Q sin(2 psi) + U cos(2 psi)
     """
     c2 = np.cos(2.0 * psi)
     s2 = np.sin(2.0 * psi)
-    Q_rot = Q * c2 - U * s2
-    U_rot = Q * s2 + U * c2
+    Q_rot = Q * c2 + U * s2
+    U_rot = -Q * s2 + U * c2
     return Q_rot, U_rot
 
 
