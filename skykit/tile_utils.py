@@ -148,7 +148,18 @@ def write_tileset_hdf5(tileset, filepath):
         f.attrs['pol'] = tileset.pol
         
         # Store main data array
-        f.create_dataset('data', data=tileset.data)
+        dset = f.create_dataset('data', data=tileset.data)
+        
+        # Add dimension labels for clarity
+        if tileset.pol:
+            dset.dims[0].label = 'tile'
+            dset.dims[1].label = 'stokes'
+            dset.dims[2].label = 'x'
+            dset.dims[3].label = 'y'
+        else:
+            dset.dims[0].label = 'tile'
+            dset.dims[1].label = 'x'
+            dset.dims[2].label = 'y'
 
 def read_tileset_hdf5(filepath):
     """
