@@ -82,7 +82,72 @@ Serializes a `TileSet` to an HDF5 file, storing the `data` array and geometry me
 - `filepath`: Destination path for the output `.h5` file.
 
 #### `read_tileset_hdf5(filepath: str)`
-Given a strict path parameter context, reads an HDF5 file, validates its attributes formally (`nside`, `tile_nside`, `margin`, `pol`), and returns an accurate `TileSet`.
+Reads an HDF5 file written by `write_tileset_hdf5`, validates that all required metadata attributes are present, and reconstructs the `TileSet`.
+- `filepath`: Path to the source `.h5` file.
+- *Returns*: A fully reconstructed `TileSet` with `data`, `nside`, `tile_nside`, `margin`, and `pol` restored.
+- *Raises*: `ValueError` if any required attribute (`nside`, `tile_nside`, `margin`, `pol`, `data`) is missing from the file.
+
+---
+
+### `skykit.tile_plotting`
+
+Plotting utilities for inspecting individual `TileSet` tiles. Two rendering modes are provided:
+- **Flat** (`_flat`): renders raw pixel data with `imshow` at native pixel resolution with no coordinate projection. An interior bounding-box outline marks the tile margin boundary.
+- **Projected** (`_proj`): renders data on a gnomonic TAN WCS axes using `pcolormesh`, correctly mapping each pixel corner to celestial coordinates. Graticule lines are overlaid.
+
+All plotting functions return the `matplotlib.figure.Figure` object and accept additional `**kwargs` forwarded to the underlying `imshow` / `pcolormesh` call (e.g., `cmap`, `vmin`, `vmax`).
+
+#### `get_tile_wcs(tileset: TileSet, face: int, tx: int, ty: int, coord: str = 'G') -> WCS`
+Constructs an `astropy.wcs.WCS` gnomonic (TAN) projection object centred on a tile, derived from the actual 3D HEALPix geometry. Robust at all sky positions including the poles.
+- `face`, `tx`, `ty`: Tile identifiers.
+- `coord`: Coordinate system — `'G'` for Galactic (GLON/GLAT), `'C'` for Equatorial ICRS (RA/Dec).
+- *Returns*: A 2-axis `WCS` object with TAN projection.
+- *Raises*: `ValueError` if `coord` is not `'G'` or `'C'`.
+
+#### `plot_tile_flat(tileset: TileSet, face: int, tx: int, ty: int, dpi: float = None, title: str = None, **kwargs) -> Figure`
+Plots a tile as a flat `imshow` image at native pixel resolution with no WCS projection. Overlays a thin bounding-box outline separating the interior from the margin region.
+- `face`, `tx`, `ty`: Tile identifiers.
+- `dpi`: Figure DPI. Uses matplotlib default if `None`.
+- `title`: Custom figure title. Defaults to `'Face {face} tx {tx} ty {ty} (Flat)'`.
+- For polarisation `TileSet`s, plots Stokes Q and U side-by-side in a `(1, 2)` subplot layout.
+
+#### `plot_tile_proj(tileset: TileSet, face: int, tx: int, ty: int, coord: str = 'G', dpi: float = None, title: str = None, **kwargs) -> Figure`
+Plots a tile using `pcolormesh` on WCS-projected axes, correctly warping each pixel to its celestial footprint on the sphere. Renders graticule lines and enforces square aspect ratio.
+- `face`, `tx`, `ty`: Tile identifiers.
+- `coord`: Coordinate system for the WCS axes (`'G'` or `'C'`).
+- `dpi`: Figure DPI.
+- `title`: Custom figure title.
+- For polarisation `TileSet`s, plots Stokes Q and U side-by-side.
+
+#### `plot_tile_flat_at(tileset: TileSet, lon: float, lat: float, dpi: float = None, title: str = None, **kwargs) -> Figure`
+Convenience wrapper: finds the tile that contains the sky coordinate `(lon, lat)` and calls `plot_tile_flat`.
+- `lon`, `lat`: Sky coordinates in degrees.
+
+#### `plot_tile_proj_at(tileset: TileSet, lon: float, lat: float, coord: str = 'G', dpi: float = None, title: str = None, **kwargs) -> Figure`
+Convenience wrapper: finds the tile that contains the sky coordinate `(lon, lat)` and calls `plot_tile_proj`.
+- `lon`, `lat`: Sky coordinates in degrees.
+- `coord`: Coordinate system for the WCS axes (`'G'` or `'C'`).
+
+#### `plot_scattering_coefs(tileset: TileSet, coeffs: dict, face: int, tx: int, ty: int, order: int = 1, path_idx: int = 0, coord: str = 'G', dpi: float = None, title: str = None, **kwargs) -> Figure`
+Plots a single spatial scattering coefficient map for a tile on WCS-projected axes.
+- `tileset`: The `TileSet` used to generate the scattering coefficients.
+- `coeffs`: Output dict from `Scattering2D.transform_tileset`, containing `'S0'`, `'S1'`, `'S2'`.
+- `face`, `tx`, `ty`: Tile identifiers.
+- `order`: Scattering order to plot (0, 1, or 2).
+- `path_idx`: Index into the path dimension of `S1` or `S2` to select which coefficient map to display.
+- `coord`: Coordinate system (`'G'` or `'C'`).
+- For polarisation `TileSet`s, plots Stokes Q and U coefficient maps side-by-side.
+- *Raises*: `KeyError` if the requested scattering order is not present in `coeffs`.
+
+#### `plot_scattering_tile(coeffs: dict, order: int = 1, path_idx: int = 0, dpi: float = None, title: str = None, **kwargs) -> Figure`
+Plots a scattering coefficient map directly from the output of `Scattering2D.transform_tile`. Works on single-tile coefficients — no `TileSet` or tile index is required. Rendered as a flat `imshow` without WCS projection.
+- `coeffs`: Output dict from `Scattering2D.transform_tile`, containing `'S0'`, `'S1'`, and/or `'S2'`.
+- `order`: Scattering order to display (0, 1, or 2). Default `1`.
+- `path_idx`: Index into the path dimension of `S1` or `S2`. Ignored for order 0.
+- `dpi`: Figure DPI.
+- `title`: Custom title. Defaults to an auto-generated label such as `'S1 (path 3)'`.
+- For polarisation inputs (`P=2`), plots Stokes Q and U side-by-side.
+- *Raises*: `KeyError` if the requested scattering order is not present in `coeffs`.
 
 ---
 
@@ -136,17 +201,25 @@ The scattering transform extracts translation-invariant, deformation-stable feat
 All convolutions are performed using JAX-accelerated FFTs.
 
 #### `class Scattering2D`
-JAX-accelerated class to compute the 2D Wavelet Scattering Transform.
-- `__init__(M: int, N: int, J: int, L: int, wavelet_type: str = 'morlet')`
-  - `M`, `N`: Spatial dimensions of the input tiles the transform will be applied to.
-  - `J`: Number of dyadic scales (must match the filter bank used for any pre-computed tiles).
-  - `L`: Number of orientations per scale.
-  - `wavelet_type`: Wavelet family used to build the internal filter bank via `generate_filter_bank()`.
-  - On construction, pre-computes and stores the stacked Fourier-space filter arrays `psi_vals` (shape `(J*L, M, N)`) and `phi_val` (shape `(M, N)`).
+JAX-accelerated class to compute the 2D Wavelet Scattering Transform. The filter bank must be built externally via `generate_filter_bank` and passed at construction, allowing full inspection and customisation of the filters before committing to a transform.
+- `__init__(filter_bank: dict, max_order: int = 2)`
+  - `filter_bank`: Output dict from `generate_filter_bank`. Must contain `'psi'` (list of dicts with keys `'j'`, `'theta'`, `'val'`) and `'phi'` (dict with key `'val'`). Spatial dimensions `M`, `N` and filter bank parameters `J`, `L` are inferred automatically from the dict.
+  - `max_order`: Maximum scattering order to compute (1 or 2). Default is 2.
+  - On construction, infers `M`, `N` from the shape of the first `psi` filter; infers `J` as `max(j) + 1` and `L` as the number of filters at `j=0`. Stacks and JIT-compiles the filter arrays for fast execution.
+- **Inferred attributes**: `M`, `N`, `J`, `L` — readable after construction.
 - **Methods**:
   - `transform_tile(x: jnp.ndarray) -> dict`:
-    - `x`: Input 2D real-valued spatial array of shape `(M, N)`.
+    - `x`: Input 2D real-valued spatial array of shape `(M, N)`, or shape `(P, M, N)` for polarisation.
     - *Returns*: A dictionary with keys:
       - `'S0'`: ndarray of shape `(M, N)` — zeroth-order lowpass averaged map.
       - `'S1'`: ndarray of shape `(J*L, M, N)` — first-order coefficients indexed by `(j, l)` in row-major order.
       - `'S2'`: ndarray of shape `(n_paths, M, N)` — second-order coefficients for all valid `(j1, l1, j2, l2)` pairs with `j2 > j1`.
+  - `transform_tileset(tileset: TileSet) -> dict`:
+    - Computes the scattering transform over all tiles in a `TileSet` in a single vectorised JAX batch.
+    - `tileset`: Input `TileSet` of apodized patches. Dimensions `(H, W)` must match `(M, N)`.
+    - *Returns*: A dictionary with keys:
+      - `'S0'`: ndarray of shape `(N_tiles, M, N)` — zeroth-order coefficients for every tile.
+      - `'S1'`: ndarray of shape `(N_tiles, J*L, M, N)` — first-order coefficients.
+      - `'S2'`: ndarray of shape `(N_tiles, n_paths, M, N)` — second-order coefficients.
+    - For polarisation `TileSet`s, an extra axis of size 2 (Stokes Q/U) is inserted after `N_tiles`.
+    - *Raises*: `ValueError` if tile spatial dimensions do not match `(M, N)`.
