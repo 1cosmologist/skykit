@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from .jax_wavelets import generate_filter_bank
 
 class Scattering2D:
     """
@@ -9,48 +8,44 @@ class Scattering2D:
     Computes scattering coefficients directly on pre-tiled batches (from a TileSet).
     Uses undecimated formulation (no spatial downsampling) to preserve 1:1 pixel 
     correspondence with the original tiles, allowing easy reconstruction or analysis.
+
+    The filter bank (dict with 'psi' and 'phi' keys) must be generated externally via
+    ``generate_filter_bank`` and passed in at construction time. This allows the caller
+    to choose and inspect the filter bank before committing to a transform.
     """
     
-    def __init__(self, M, N, J=3, L=8, wavelet_type='morlet', sigma0=0.8, xi0=0.785, max_order=2):
+    def __init__(self, filter_bank, max_order=2):
         """
-        Initialize the Scattering Transform filter bank.
+        Initialize the Scattering Transform from a pre-built filter bank.
         
         Parameters
         ----------
-        M, N : int
-            Spatial dimensions of the input tiles.
-        J : int
-            Maximum scale of the wavelets.
-        L : int
-            Number of orientations per scale.
-        wavelet_type : str
-            Type of wavelet ('morlet', 'gabor', 'bump').
-        sigma0 : float
-            Base spatial bandwidth.
-        xi0 : float
-            Base center frequency.
+        filter_bank : dict
+            Output of ``generate_filter_bank``. Must contain:
+            - ``'psi'``: list of dicts, each with keys ``'j'``, ``'theta'``, ``'val'``
+              where ``'val'`` is a 2D JAX/numpy array of shape ``(M, N)``.
+            - ``'phi'``: dict with key ``'val'``, a 2D array of shape ``(M, N)``.
         max_order : int
-            Max scattering order (1 or 2).
+            Maximum scattering order to compute (1 or 2).
         """
-        self.M = M
-        self.N = N
-        self.J = J
-        self.L = L
         self.max_order = max_order
-        
-        # Generate the JAX-compatible filter bank in Fourier space
-        self.filters = generate_filter_bank(M, N, J, L, wavelet_type=wavelet_type, 
-                                            sigma0=sigma0, xi0=xi0)
-        
-        # Precompile and format the filter arrays for vectorised application
+
+        # Infer spatial dimensions from the first psi filter
+        psi0_val = filter_bank['psi'][0]['val']
+        self.M, self.N = psi0_val.shape
+
+        # Infer J and L from the psi list
+        self.J = int(max(f['j'] for f in filter_bank['psi'])) + 1
+        self.L = sum(1 for f in filter_bank['psi'] if f['j'] == 0)
+
         # Stack all psi filters into a single tensor of shape (N_psi, M, N)
-        self.psi_vals = jnp.stack([f['val'] for f in self.filters['psi']])
-        # Ensure primitive Python ints are used so jax.jit doesn't trace the mask indices
-        self.psi_j = np.array([int(f['j']) for f in self.filters['psi']])
-        
+        self.psi_vals = jnp.stack([f['val'] for f in filter_bank['psi']])
+        # Ensure primitive Python ints so jax.jit doesn't trace the mask indices
+        self.psi_j = np.array([int(f['j']) for f in filter_bank['psi']])
+
         # Lowpass filter phi shape (M, N)
-        self.phi_val = self.filters['phi']['val']
-        
+        self.phi_val = filter_bank['phi']['val']
+
         # JIT compile the batched transform function
         self._transform_jit = jax.jit(self._compute_coefficients)
 
