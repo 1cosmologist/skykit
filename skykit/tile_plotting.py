@@ -371,3 +371,85 @@ def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, co
         
     return fig
 
+
+def plot_scattering_tile(coeffs, order=1, path_idx=0, dpi=None, title=None, **kwargs):
+    '''
+    Plot a scattering coefficient map from the output of Scattering2D.transform_tile.
+
+    Unlike plot_scattering_coefs, this function works directly on the dict returned
+    by a single-tile transform — no TileSet or tile index required.  The image is
+    rendered as a flat imshow without WCS projection.
+
+    Parameters
+    ----------
+    coeffs : dict
+        Output of ``Scattering2D.transform_tile``.  Expected keys:
+        - ``'S0'``: ndarray of shape ``(H, W)`` or ``(P, H, W)``
+        - ``'S1'``: ndarray of shape ``(N_psi, H, W)`` or ``(P, N_psi, H, W)``
+        - ``'S2'``: ndarray of shape ``(N_paths, H, W)`` or ``(P, N_paths, H, W)``
+    order : int, optional
+        Scattering order to display (0, 1, or 2).  Default is 1.
+    path_idx : int, optional
+        Index into the path dimension for orders 1 and 2.  Ignored for order 0.
+    dpi : float, optional
+        Figure DPI.  Uses matplotlib default when None.
+    title : str, optional
+        Figure title.  Auto-generated from order/path_idx when None.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+
+    Raises
+    ------
+    KeyError
+        If the requested scattering order is not present in *coeffs*.
+    '''
+    key = f'S{order}'
+    if key not in coeffs:
+        raise KeyError(f'Order {order} coefficients (key \'{key}\') not found in coeffs dict.')
+
+    raw = coeffs[key]
+
+    # Detect polarisation: S0 is (P, H, W), S1 is (P, N_psi, H, W), etc.
+    # For order 0 pol raw.ndim==3; for order>=1 pol raw.ndim==4.
+    is_pol = (order == 0 and raw.ndim == 3) or (order >= 1 and raw.ndim == 4)
+
+    if order == 0:
+        if is_pol:
+            tile_q = raw[0]
+            tile_u = raw[1]
+        else:
+            tile_data = raw
+        title_suffix = 'S0'
+    else:
+        if is_pol:
+            tile_q = raw[0, path_idx]
+            tile_u = raw[1, path_idx]
+        else:
+            tile_data = raw[path_idx]
+        title_suffix = f'S{order} (path {path_idx})'
+
+    base_title = title if title is not None else title_suffix
+
+    fig_kwargs = {}
+    if dpi is not None:
+        fig_kwargs['dpi'] = dpi
+
+    if is_pol:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4), **fig_kwargs)
+        im1 = ax1.imshow(tile_q.T, origin='lower', **kwargs)
+        ax1.set_title(f'{base_title} - Stokes Q')
+        plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+
+        im2 = ax2.imshow(tile_u.T, origin='lower', **kwargs)
+        ax2.set_title(f'{base_title} - Stokes U')
+        plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    else:
+        fig, ax = plt.subplots(**fig_kwargs)
+        im = ax.imshow(tile_data.T, origin='lower', **kwargs)
+        ax.set_title(base_title)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    return fig
+
