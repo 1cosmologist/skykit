@@ -1,6 +1,7 @@
 import numpy as np
 import healpy as hp
 from astropy.wcs import WCS
+import matplotlib.pyplot as plt
 
 def get_tile_wcs(tileset, face, tx, ty, coord='G'):
     """
@@ -210,38 +211,98 @@ def get_tile_wcs(tileset, face, tx, ty, coord='G'):
     return w
 
 
-
-def plot_tile(tileset, face, tx, ty, coord='G', **kwargs):
-    '''Plot a specific tile by index using its WCS.'''
-    global plt
-    try: import matplotlib.pyplot as plt
-    except ImportError: raise ImportError('matplotlib is required for plotting')
-    wcs = get_tile_wcs(tileset, face, tx, ty, coord=coord)
+def plot_tile_flat(tileset, face, tx, ty, dpi=None, title=None, **kwargs):
+    '''Plot a specific tile by index as a flat image array without WCS projection, 
+    overlaying an outline for the interior of the tile.'''
     tile_data = tileset.get_tile(face, tx, ty)
+    
+    fig_kwargs = {}
+    if dpi is not None:
+        fig_kwargs['dpi'] = dpi
+        
+    base_title = title if title is not None else f'Face {face} tx {tx} ty {ty} (Flat)'
+    
+    m = tileset.margin
+    s = tileset.tile_nside
+    box_x = [m - 0.5, m + s - 0.5, m + s - 0.5, m - 0.5, m - 0.5]
+    box_y = [m - 0.5, m - 0.5, m + s - 0.5, m + s - 0.5, m - 0.5]
+
     if tileset.pol:
-        fig = plt.figure(figsize=(10, 4))
-        ax1 = fig.add_subplot(121, projection=wcs)
-        ax1.imshow(tile_data[0].T, origin='lower', **kwargs)
-        ax1.set_title(f'Face {face} tx {tx} ty {ty} - Stokes Q')
-        ax1.grid(color='white', ls='solid', alpha=0.5)
-        ax2 = fig.add_subplot(122, projection=wcs)
-        ax2.imshow(tile_data[1].T, origin='lower', **kwargs)
-        ax2.set_title(f'Face {face} tx {tx} ty {ty} - Stokes U')
-        ax2.grid(color='white', ls='solid', alpha=0.5)
+        fig = plt.figure(figsize=(10, 4), **fig_kwargs)
+        ax1 = fig.add_subplot(121)
+        im1 = ax1.imshow(tile_data[0].T, origin='lower', **kwargs)
+        ax1.plot(box_x, box_y, color='k', alpha=0.5, linestyle='-', linewidth=0.5)
+        ax1.set_title(f'{base_title} - Stokes Q')
+        plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+        
+        ax2 = fig.add_subplot(122)
+        im2 = ax2.imshow(tile_data[1].T, origin='lower', **kwargs)
+        ax2.plot(box_x, box_y, color='k', alpha=0.5, linestyle='-', linewidth=0.5)
+        ax2.set_title(f'{base_title} - Stokes U')
+        plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
     else:
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection=wcs)
-        ax.imshow(tile_data.T, origin='lower', **kwargs)
-        ax.set_title(f'Face {face} tx {tx} ty {ty}')
-        ax.grid(color='white', ls='solid', alpha=0.5)
+        fig = plt.figure(**fig_kwargs)
+        ax = fig.add_subplot(111)
+        im = ax.imshow(tile_data.T, origin='lower', **kwargs)
+        ax.plot(box_x, box_y, color='k', alpha=0.5, linestyle='-', linewidth=0.5)
+        ax.set_title(base_title)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     return fig
 
-def plot_tile_at(tileset, lon, lat, coord='G', **kwargs):
-    '''Plot the tile containing the specified angular coordinates.'''
-    face, tx, ty = tileset.tile_containing(lon, lat)
-    return plot_tile(tileset, face, tx, ty, coord=coord, **kwargs)
+def plot_tile_proj(tileset, face, tx, ty, coord='G', dpi=None, title=None, **kwargs):
+    '''Plot a specific tile by index using pcolormesh and its WCS for proper spherical wrapping.'''
+    wcs = get_tile_wcs(tileset, face, tx, ty, coord=coord)
+    tile_data = tileset.get_tile(face, tx, ty)
+    
+    fig_kwargs = {}
+    if dpi is not None:
+        fig_kwargs['dpi'] = dpi
+        
+    base_title = title if title is not None else f'Face {face} tx {tx} ty {ty} (Proj)'
+    
+    n = tileset.tile_full
+    x_edges = np.arange(n + 1) - 0.5
+    y_edges = np.arange(n + 1) - 0.5
+    X, Y = np.meshgrid(x_edges, y_edges)
+    lon_edges, lat_edges = wcs.pixel_to_world_values(X, Y)
+    
+    if tileset.pol:
+        fig = plt.figure(figsize=(10, 4), **fig_kwargs)
+        ax1 = fig.add_subplot(121, projection=wcs)
+        im1 = ax1.pcolormesh(lon_edges, lat_edges, tile_data[0].T, transform=ax1.get_transform('world'), **kwargs)
+        ax1.set_title(f'{base_title} - Stokes Q')
+        ax1.grid(color='white', ls='solid', alpha=0.5)
+        ax1.set_aspect('equal')
+        plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+        
+        ax2 = fig.add_subplot(122, projection=wcs)
+        im2 = ax2.pcolormesh(lon_edges, lat_edges, tile_data[1].T, transform=ax2.get_transform('world'), **kwargs)
+        ax2.set_title(f'{base_title} - Stokes U')
+        ax2.grid(color='white', ls='solid', alpha=0.5)
+        ax2.set_aspect('equal')
+        plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    else:
+        fig = plt.figure(**fig_kwargs)
+        ax = fig.add_subplot(111, projection=wcs)
+        im = ax.pcolormesh(lon_edges, lat_edges, tile_data.T, transform=ax.get_transform('world'), **kwargs)
+        ax.set_title(base_title)
+        ax.grid(color='white', ls='solid', alpha=0.5)
+        ax.set_aspect('equal')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    return fig
 
-def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, coord='G', **kwargs):
+def plot_tile_flat_at(tileset, lon, lat, dpi=None, title=None, **kwargs):
+    '''Plot the tile containing the specified angular coordinates (flat).'''
+    face, tx, ty = tileset.tile_containing(lon, lat)
+    return plot_tile_flat(tileset, face, tx, ty, dpi=dpi, title=title, **kwargs)
+
+def plot_tile_proj_at(tileset, lon, lat, coord='G', dpi=None, title=None, **kwargs):
+    '''Plot the tile containing the specified angular coordinates (projected).'''
+    face, tx, ty = tileset.tile_containing(lon, lat)
+    return plot_tile_proj(tileset, face, tx, ty, coord=coord, dpi=dpi, title=title, **kwargs)
+
+
+def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, coord='G', dpi=None, title=None, **kwargs):
     '''
     Plot a specific scattering coefficient map for a tile using its WCS.
 
@@ -260,13 +321,14 @@ def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, co
     coord : str
         Coordinate system ('G' or 'C') for the WCS plot.
     '''
-    global plt
-    try: import matplotlib.pyplot as plt
-    except ImportError: raise ImportError('matplotlib is required for plotting')
     
     idx = tileset.tile_index(face, tx, ty)
     wcs = get_tile_wcs(tileset, face, tx, ty, coord=coord)
     
+    fig_kwargs = {}
+    if dpi is not None:
+        fig_kwargs['dpi'] = dpi
+        
     if order == 0:
         if tileset.pol:
             tile_data = coeffs['S0'][idx] # Shape (P, H, W)
@@ -283,25 +345,27 @@ def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, co
             tile_data = coeffs[key][idx, path_idx, :, :] # Shape (H, W)
         title_suffix = f'S{order} (path index {path_idx})'
         
+    base_title = title if title is not None else f'Face {face} tx {tx} ty {ty}'
+        
     if tileset.pol:
-        fig = plt.figure(figsize=(10, 4))
+        fig = plt.figure(figsize=(10, 4), **fig_kwargs)
         
         ax1 = fig.add_subplot(121, projection=wcs)
         im1 = ax1.imshow(tile_data[0].T, origin='lower', **kwargs)
-        ax1.set_title(f'Face {face} tx {tx} ty {ty}\nStokes Q - {title_suffix}')
+        ax1.set_title(f'{base_title}\nStokes Q - {title_suffix}')
         ax1.grid(color='white', ls='solid', alpha=0.5)
         plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
         
         ax2 = fig.add_subplot(122, projection=wcs)
         im2 = ax2.imshow(tile_data[1].T, origin='lower', **kwargs)
-        ax2.set_title(f'Face {face} tx {tx} ty {ty}\nStokes U - {title_suffix}')
+        ax2.set_title(f'{base_title}\nStokes U - {title_suffix}')
         ax2.grid(color='white', ls='solid', alpha=0.5)
         plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
     else:
-        fig = plt.figure()
+        fig = plt.figure(**fig_kwargs)
         ax = fig.add_subplot(111, projection=wcs)
         im = ax.imshow(tile_data.T, origin='lower', **kwargs)
-        ax.set_title(f'Face {face} tx {tx} ty {ty}\n{title_suffix}')
+        ax.set_title(f'{base_title}\n{title_suffix}')
         ax.grid(color='white', ls='solid', alpha=0.5)
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         
