@@ -15,6 +15,7 @@ ambiguous mappings. This acts directly on real pixel values (no interpolation).
 import numpy as np
 import healpy as hp
 
+import functools
 import jax
 import jax.numpy as jnp
 
@@ -197,7 +198,7 @@ def _unwrap_grid_vec(f_base, IX, IY, nside, order='xy'):
     return np.asarray(f_res, dtype=np.int64), np.asarray(x_res, dtype=np.int64), np.asarray(y_res, dtype=np.int64)
 
 
-@jax.jit(static_argnums=1)
+@functools.partial(jax.jit, static_argnums=1)
 def _extrapolate_geom_vectors_jax(vec_grid, margin):
     """
     Geometrically extrapolate 3D vectors along the margin by performing
