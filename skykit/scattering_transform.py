@@ -82,7 +82,7 @@ class Scattering2D:
             
             # S1 = U1 * phi
             U1_f_new = jnp.fft.fft2(U1)
-            S1_f = U1_f_new * self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
+            S1_f = U1_f_new #* self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
             S1 = jnp.real(jnp.fft.ifft2(S1_f))
             out['S1'] = S1
             

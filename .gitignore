@@ -29,3 +29,8 @@ htmlcov/
 # Editor / IDE
 .vscode/
 .idea/
+
+# Data
+*.fits
+
+plot_gradients.py

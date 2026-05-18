@@ -197,6 +197,57 @@ def _unwrap_grid_vec(f_base, IX, IY, nside, order='xy'):
     return np.asarray(f_res, dtype=np.int64), np.asarray(x_res, dtype=np.int64), np.asarray(y_res, dtype=np.int64)
 
 
+@jax.jit(static_argnums=1)
+def _extrapolate_geom_vectors_jax(vec_grid, margin):
+    """
+    Geometrically extrapolate 3D vectors along the margin by performing
+    a bilinear 2D extrapolation of the 3D surface vectors,
+    then re-normalising to the unit sphere.
+    vec_grid has shape (s, s, 3) where s is tile_nside.
+    """
+    s = vec_grid.shape[0]
+    
+    # Create coordinate grids
+    i_idx = jnp.arange(-margin, s + margin)
+    j_idx = jnp.arange(-margin, s + margin)
+    I, J = jnp.meshgrid(i_idx, j_idx, indexing='ij')
+    
+    # Clip coordinates to be inside the valid vec_grid for base values
+    I_clip = jnp.clip(I, 0, s - 1)
+    J_clip = jnp.clip(J, 0, s - 1)
+    
+    # Base vector at the closest valid point
+    v_base = vec_grid[I_clip, J_clip, :]
+    
+    # Distance from the valid point
+    dI = I - I_clip
+    dJ = J - J_clip
+    
+    # Calculate gradients at the generic (I_clip, J_clip) points using central differences
+    I_plus = jnp.clip(I_clip + 1, 0, s - 1)
+    I_minus = jnp.clip(I_clip - 1, 0, s - 1)
+    denom_I = I_plus - I_minus
+    denom_I = jnp.where(denom_I == 0, 1, denom_I)
+    dv_di = (vec_grid[I_plus, J_clip, :] - vec_grid[I_minus, J_clip, :]) / denom_I[..., None]
+    
+    J_plus = jnp.clip(J_clip + 1, 0, s - 1)
+    J_minus = jnp.clip(J_clip - 1, 0, s - 1)
+    denom_J = J_plus - J_minus
+    denom_J = jnp.where(denom_J == 0, 1, denom_J)
+    dv_dj = (vec_grid[I_clip, J_plus, :] - vec_grid[I_clip, J_minus, :]) / denom_J[..., None]
+    
+    # Linear extrapolation in 3D
+    v_extrap = v_base + dv_di * dI[..., None] + dv_dj * dJ[..., None]
+    
+    # Normalize back to the unit sphere
+    v_extrap = v_extrap / jnp.linalg.norm(v_extrap, axis=-1, keepdims=True)
+    
+    return v_extrap, dv_di, dv_dj
+
+def _extrapolate_geom_vectors(vec_grid, margin):
+    v_extrap, dv_di, dv_dj = _extrapolate_geom_vectors_jax(jnp.asarray(vec_grid), margin)
+    return np.asarray(v_extrap), np.asarray(dv_di), np.asarray(dv_dj)
+
 # ---------------------------------------------------------------------------
 # Internal: polarisation rotation via quaternions
 # ---------------------------------------------------------------------------
@@ -373,12 +424,13 @@ class HealpixTileProjector:
     Use this class to transform multiple maps with the same geometry
     to avoid recalculating coordinates and rotation angles.
     """
-    def __init__(self, nside, tile_nside, margin, pol=False):
+    def __init__(self, nside, tile_nside, margin, pol=False, margin_method='topological'):
         _validate_inputs(nside, tile_nside, margin)
         self.nside = nside
         self.tile_nside = tile_nside
         self.margin = margin
         self.pol = pol
+        self.margin_method = margin_method
         
         self.n_subtiles = nside // tile_nside
         self.tile_full = tile_nside + 2 * margin
@@ -409,14 +461,40 @@ class HealpixTileProjector:
                     y0 = ty * tile_nside
                     
                     # Full tile mapping
-                    IX = x0 + II - margin
-                    IY = y0 + JJ - margin
-
-                    f_xy, x_xy, y_xy = _unwrap_grid_vec(face, IX, IY, nside, 'xy')
-                    f_yx, x_yx, y_yx = _unwrap_grid_vec(face, IX, IY, nside, 'yx')
-
-                    ipix_xy = hp.xyf2pix(nside, x_xy, y_xy, f_xy, nest=True)
-                    ipix_yx = hp.xyf2pix(nside, x_yx, y_yx, f_yx, nest=True)
+                    if self.margin_method == 'topological':
+                        IX = x0 + II - margin
+                        IY = y0 + JJ - margin
+    
+                        f_xy, x_xy, y_xy = _unwrap_grid_vec(face, IX, IY, nside, 'xy')
+                        f_yx, x_yx, y_yx = _unwrap_grid_vec(face, IX, IY, nside, 'yx')
+    
+                        ipix_xy = hp.xyf2pix(nside, x_xy, y_xy, f_xy, nest=True)
+                        ipix_yx = hp.xyf2pix(nside, x_yx, y_yx, f_yx, nest=True)
+                    elif self.margin_method == 'geometric':
+                        # Get the interior HEALPix pixel coordinates mapped to 3D vectors
+                        ix_int = np.arange(tx * tile_nside, (tx + 1) * tile_nside, dtype=np.int64)
+                        iy_int = np.arange(ty * tile_nside, (ty + 1) * tile_nside, dtype=np.int64)
+                        IX_int, IY_int = np.meshgrid(ix_int, iy_int, indexing="xy")
+                        f_int = np.full(IX_int.shape, face, dtype=np.int64)
+                        
+                        ipix_int = hp.xyf2pix(nside, IX_int, IY_int, f_int, nest=True)
+                        vec_int = np.column_stack(hp.pix2vec(nside, ipix_int.ravel(), nest=True)).reshape((tile_nside, tile_nside, 3))
+                        
+                        # Extrapolate vectors
+                        vec_extrap, dv_di, dv_dj = _extrapolate_geom_vectors(vec_int, margin)
+                        self.debug_dv_di = dv_di
+                        self.debug_dv_dj = dv_dj
+                        
+                        # Map back to HEALPix pixels
+                        ipix_geom = hp.vec2pix(nside, vec_extrap[..., 0].ravel(), 
+                                               vec_extrap[..., 1].ravel(), 
+                                               vec_extrap[..., 2].ravel(), nest=True)
+                        ipix_geom = ipix_geom.reshape((self.tile_full, self.tile_full))
+                        
+                        ipix_xy = ipix_geom
+                        ipix_yx = ipix_geom
+                    else:
+                        raise ValueError(f"Unknown margin_method: {self.margin_method}")
 
                     self.ipix_xy[idx] = ipix_xy
                     self.ipix_yx[idx] = ipix_yx
@@ -524,12 +602,17 @@ class HealpixTileProjector:
                 return hp.reorder(nested_map, n2r=True)
 
 
-def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=False):
+def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=False, margin_method='topological'):
     """
-    Decompose a HEALPix map into overlapping square tiles, resolving
-    margin pixels via exact topological boundary unfolding. Any gaps in
-    the margins (topological singularities) are rebinned by averaging the 
-    ambiguous mappings. This acts directly on real pixel values (no interpolation).
+    Decompose a HEALPix map into overlapping square tiles. 
+
+    If margin_method='topological', border pixels are resolved via exact topological 
+    boundary unfolding. Any gaps in the margins (topological singularities) are rebinned 
+    by averaging the ambiguous mappings. This acts directly on real pixel values (no interpolation).
+
+    If margin_method='geometric', margins are assigned by linear vector extrapolation 
+    of the 3D surface vectors from the tile interior onto the unit sphere, which are 
+    then snapped to the nearest HEALPix pixels.
 
     Parameters
     ----------
@@ -548,12 +631,14 @@ def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=Fals
     pol : bool
         If True, treat input as a spin-2 (Q, U) field and
         parallel-transport to each tile centre's reference frame.
+    margin_method : str
+        Method to handle border pixels ('topological' or 'geometric').
 
     Returns
     -------
     tileset : TileSet
     """
-    projector = HealpixTileProjector(nside, tile_nside, margin, pol=pol)
+    projector = HealpixTileProjector(nside, tile_nside, margin, pol=pol, margin_method=margin_method)
     return projector.map2tiles(healpix_map, nested=nested)
 
 

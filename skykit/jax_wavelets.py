@@ -90,8 +90,25 @@ def lowpass_2d(M, N, sigma):
 
 def bump_2d(M, N, sigma, theta, xi, slant=0.5):
     """
-    Computes a 2D Bump wavelet in the Fourier domain.
-    Bump wavelets have strictly compact support in the frequency domain.
+    Computes a 2D analytic bump wavelet in the Fourier domain.
+
+    The filter has strictly compact support — it is the smooth bump function
+    ``exp(1/(d²-1)) * 1[d²<1]`` evaluated on an elliptical disk centred at
+    ``(xi, 0)`` in the rotated coordinate frame, where ``d²`` is the
+    normalised squared distance from the centre.
+
+    This is an **analytic** (one-sided) directional wavelet: support exists
+    only at the positive-frequency lobe ``+xi``, not the conjugate ``-xi``
+    lobe.  The resulting spatial filter is therefore complex, analogous to
+    the Morlet/Gabor wavelets.  This is the standard convention for
+    scattering transforms (the modulus discards phase).
+
+    It is *not* the symmetric real-valued bump steerable wavelet of
+    Simoncelli & Freeman (1995), which carries both ``±xi`` lobes and
+    produces a real spatial filter.
+
+    The compact Fourier support avoids inter-scale aliasing better than
+    Gaussian-tailed wavelets on finite grids.
     """
     u, v = _compute_grid(M, N)
     
