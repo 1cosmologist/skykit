@@ -72,7 +72,7 @@ The lowpass filter $\phi$ corresponds to the maximum scale $J$, smoothing over t
 
 ## 4. The 2D Scattering Transform (`Scattering2D`)
 
-The `Scattering2D` class implements an undecimated (no spatial downsampling) transform, operating in batches over tensors $x$. Undecimated operations are mathematically equivalent to computing the standard scattering transform but preserving the full resolution at output for direct map projection.
+The `Scattering2D` class implements an undecimated (no spatial downsampling) transform, operating in batches over tensors $x$. By default, the lowpass-averaged coefficients retain full spatial resolution for tile-aligned analysis.
 
 Let $x \ast \phi$ denote spatial convolution. In `skykit`, this is evaluated via the FFT:
 
@@ -97,4 +97,4 @@ Extracts interference patterns (e.g., textures, branching filaments) between dif
 1.  **Modulus:** $U_2(j_1, \theta_1, j_2, \theta_2) x = | U_1(j_1, \theta_1) x \ast \psi_{j_2, \theta_2} |$
 2.  **Averaging:** $S_2(j_1, \theta_1, j_2, \theta_2) x = U_2(j_1, \theta_1, j_2, \theta_2) x \ast \phi$
 
-The total result from `transform_tile()` or `transform_tileset()` is a dictionary returning the concatenated multi-channel tensors for `S0`, `S1`, and `S2`, with channels mapping to the respective paths sequentially.
+The default result from `transform_tile()` or `transform_tileset()` contains maps `S0`, `S1`, and `S2`, with channels mapping to paths sequentially. With `spatial_average=True`, each map is reduced to its arithmetic mean over the entire tile, including margins. With `return_feature_maps=True`, the result additionally contains `U1` and `U2`: the modulus maps before convolution with $\phi_J$. These remain maps even when `spatial_average=True`. Because $\hat\phi_J(0)=1$ and the FFT convolution is periodic, the spatial mean of each `S` map equals that of its corresponding unaveraged `U` map, up to numerical precision.

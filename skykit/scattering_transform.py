@@ -47,9 +47,12 @@ class Scattering2D:
         self.phi_val = filter_bank['phi']['val']
 
         # JIT compile the batched transform function
-        self._transform_jit = jax.jit(self._compute_coefficients)
+        self._transform_jit = jax.jit(
+            self._compute_coefficients,
+            static_argnames=('spatial_average', 'return_feature_maps'),
+        )
 
-    def _compute_coefficients(self, x):
+    def _compute_coefficients(self, x, spatial_average=False, return_feature_maps=False):
         """
         Internal JAX function to compute scattering paths on a batch.
         
@@ -61,17 +64,22 @@ class Scattering2D:
         Returns
         -------
         out : dict
-            'S0': shape (B, M, N)
-            'S1': shape (B, N_psi, M, N)
-            'S2': shape (B, N_paths_order2, M, N)
+            'S0': shape (B, M, N), or (B,) when spatial_average=True
+            'S1': shape (B, N_psi, M, N), or (B, N_psi)
+            'S2': shape (B, N_paths_order2, M, N), or (B, N_paths_order2)
+            Optional 'U1' and 'U2' are unsmoothed feature maps.
         """
         # FFT of the input: (B, M, N)
         x_f = jnp.fft.fft2(x)
         
-        # Order 0: x * phi
-        S0_f = x_f * self.phi_val[jnp.newaxis, :, :]
-        S0 = jnp.real(jnp.fft.ifft2(S0_f))
-        
+        # The mean of a periodic convolution depends only on its DC response.
+        phi_dc = jnp.real(self.phi_val[0, 0])
+        if spatial_average:
+            S0 = jnp.mean(x, axis=(-2, -1)) * phi_dc
+        else:
+            S0_f = x_f * self.phi_val[jnp.newaxis, :, :]
+            S0 = jnp.real(jnp.fft.ifft2(S0_f))
+
         out = {'S0': S0}
         
         if self.max_order >= 1:
@@ -79,17 +87,22 @@ class Scattering2D:
             # x_f (B, 1, M, N) * psi_vals (1, N_psi, M, N) -> (B, N_psi, M, N)
             U1_f = x_f[:, jnp.newaxis, :, :] * self.psi_vals[jnp.newaxis, :, :, :]
             U1 = jnp.abs(jnp.fft.ifft2(U1_f))
+            if return_feature_maps:
+                out['U1'] = U1
             
-            # S1 = U1 * phi
             U1_f_new = jnp.fft.fft2(U1)
-            S1_f = U1_f_new #* self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
-            S1 = jnp.real(jnp.fft.ifft2(S1_f))
+            if spatial_average:
+                S1 = jnp.mean(U1, axis=(-2, -1)) * phi_dc
+            else:
+                S1_f = U1_f_new * self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
+                S1 = jnp.real(jnp.fft.ifft2(S1_f))
             out['S1'] = S1
             
             if self.max_order >= 2:
                 # Order 2: ||x * psi1| * psi2|
                 # We only compute paths where j2 > j1 (frequency decreasing path to avoid energy explosion)
                 S2_list = []
+                U2_list = []
                 # Looping over j1 manually in JAX trace (fully unrolled)
                 for i1 in range(len(self.psi_vals)):
                     # Extract U1_f for path i1: shape (B, M, N)
@@ -108,21 +121,29 @@ class Scattering2D:
                     # Compute U2 for all valid j2 paths relative to this j1
                     U2_f = u1_f_curr[:, jnp.newaxis, :, :] * psi_j2_vals[jnp.newaxis, :, :, :]
                     U2 = jnp.abs(jnp.fft.ifft2(U2_f))
+                    if return_feature_maps:
+                        U2_list.append(U2)
                     
-                    # S2 = U2 * phi
-                    U2_f_new = jnp.fft.fft2(U2)
-                    s2_f = U2_f_new * self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
-                    s2 = jnp.real(jnp.fft.ifft2(s2_f))
+                    if spatial_average:
+                        s2 = jnp.mean(U2, axis=(-2, -1)) * phi_dc
+                    else:
+                        s2_f = jnp.fft.fft2(U2) * self.phi_val[jnp.newaxis, jnp.newaxis, :, :]
+                        s2 = jnp.real(jnp.fft.ifft2(s2_f))
                     S2_list.append(s2)
                     
                 if len(S2_list) > 0:
                     out['S2'] = jnp.concatenate(S2_list, axis=1)
+                    if return_feature_maps:
+                        out['U2'] = jnp.concatenate(U2_list, axis=1)
                 else:
-                    out['S2'] = jnp.empty((x.shape[0], 0, self.M, self.N))
+                    shape = (x.shape[0], 0) if spatial_average else (x.shape[0], 0, self.M, self.N)
+                    out['S2'] = jnp.empty(shape)
+                    if return_feature_maps:
+                        out['U2'] = jnp.empty((x.shape[0], 0, self.M, self.N))
                     
         return out
 
-    def transform_tileset(self, tileset):
+    def transform_tileset(self, tileset, *, spatial_average=False, return_feature_maps=False):
         """
         Compute the 2D scattering transform across all tiles in a generic TileSet.
         
@@ -130,14 +151,22 @@ class Scattering2D:
         ----------
         tileset : TileSet
             The input tileset containing apodized patches.
+        spatial_average : bool, optional
+            Return one mean value per tile and scattering path instead of a
+            coefficient map. The mean includes the full tile, including margins.
+        return_feature_maps : bool, optional
+            Also return unsmoothed modulus maps as 'U1' and 'U2'. These keep
+            their spatial dimensions even when spatial_average=True.
         
         Returns
         -------
         coeffs : dict
             A dictionary containing numpy arrays with the scattering coefficients:
-            - 'S0' : array of shape (N_tiles, H, W)
-            - 'S1' : array of shape (N_tiles, N_paths_level1, H, W)
-            - 'S2' : array of shape (N_tiles, N_paths_level2, H, W)
+            - 'S0' : shape (N_tiles, H, W), or (N_tiles,) if spatially averaged
+            - 'S1' : shape (N_tiles, N_paths_level1, H, W), or (N_tiles, N_paths_level1)
+            - 'S2' : shape (N_tiles, N_paths_level2, H, W), or (N_tiles, N_paths_level2)
+            Polarisation adds a size-2 axis after N_tiles. Optional 'U1' and
+            'U2' have the corresponding unaveraged map shapes.
         """
         import numpy as np
         
@@ -158,28 +187,20 @@ class Scattering2D:
         x_jax = jnp.array(x_in)
         
         # Execute JIT-compiled transform vectorised over the full batch
-        out_jax = self._transform_jit(x_jax)
+        out_jax = self._transform_jit(
+            x_jax, spatial_average=spatial_average,
+            return_feature_maps=return_feature_maps,
+        )
         
         # Transfer back to host numpy memory
         coeffs = {}
-        if tileset.pol:
-            coeffs['S0'] = np.array(out_jax['S0']).reshape(N_t, P, H, W)
-            if 'S1' in out_jax:
-                n_p1 = out_jax['S1'].shape[1]
-                coeffs['S1'] = np.array(out_jax['S1']).reshape(N_t, P, n_p1, H, W)
-            if 'S2' in out_jax:
-                n_p2 = out_jax['S2'].shape[1]
-                coeffs['S2'] = np.array(out_jax['S2']).reshape(N_t, P, n_p2, H, W)
-        else:
-            coeffs['S0'] = np.array(out_jax['S0'])
-            if 'S1' in out_jax:
-                coeffs['S1'] = np.array(out_jax['S1'])
-            if 'S2' in out_jax:
-                coeffs['S2'] = np.array(out_jax['S2'])
+        for key, value in out_jax.items():
+            arr = np.asarray(value)
+            coeffs[key] = arr.reshape((N_t, P) + arr.shape[1:]) if tileset.pol else arr
                 
         return coeffs
 
-    def transform_tile(self, tile_data):
+    def transform_tile(self, tile_data, *, spatial_average=False, return_feature_maps=False):
         """
         Compute the 2D scattering transform on a single tile array.
         
@@ -188,14 +209,21 @@ class Scattering2D:
         tile_data : ndarray
             Array of shape (H, W) for intensity, or (P, H, W) for polarisation.
             Must match the (M, N) spatial dimensions of the Scattering2D instance.
+        spatial_average : bool, optional
+            Return one mean value per scattering path over the full tile.
+        return_feature_maps : bool, optional
+            Also return unsmoothed modulus maps as 'U1' and 'U2'. These keep
+            their spatial dimensions even when spatial_average=True.
             
         Returns
         -------
         coeffs : dict
             A dictionary containing numpy arrays with the scattering coefficients:
-            - 'S0' : array of shape (H, W) or (P, H, W)
-            - 'S1' : array of shape (N_paths_level1, H, W) or (P, N_paths_level1, H, W)
-            - 'S2' : array of shape (N_paths_level2, H, W) or (P, N_paths_level2, H, W)
+            - 'S0' : shape (H, W) or (P, H, W); scalar or (P,) when averaged
+            - 'S1' : shape (N_paths_level1, H, W) or (P, N_paths_level1, H, W);
+              shape (N_paths_level1,) or (P, N_paths_level1) when averaged
+            - 'S2' : analogous to 'S1' for second-order paths
+            Optional 'U1' and 'U2' are always feature maps.
         """
         import numpy as np
         
@@ -211,7 +239,10 @@ class Scattering2D:
             raise ValueError(f"Tile dimensions ({H}, {W}) do not match Scattering2D dimensions ({self.M}, {self.N})")
             
         x_jax = jnp.array(x_in)
-        out_jax = self._transform_jit(x_jax)
+        out_jax = self._transform_jit(
+            x_jax, spatial_average=spatial_average,
+            return_feature_maps=return_feature_maps,
+        )
         
         coeffs = {}
         for key in out_jax:

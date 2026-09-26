@@ -5,7 +5,8 @@ Supports scalar (intensity/temperature) maps and spin-2 polarisation
 (Stokes Q/U) maps.  For polarisation, Q and U values are parallel-
 transported to a common reference frame at the tile centre using
 quaternion rotations, so that each tile has a self-consistent
-polarisation convention.
+polarisation convention. Input Q/U maps must use the HEALPix/COSMO
+convention (U_COSMO = -U_IAU); no convention conversion is performed.
 
 Border pixels are resolved by exact topological boundary unfolding. Any gaps in
 the margins (topological singularities) are rebinned by averaging the 
@@ -273,8 +274,8 @@ def _compute_psi(nside, face, tx, ty, tile_nside, ipix_tile):
     in a tile (fully vectorised).
 
     psi is the angle from the pixel's HEALPix local north to the
-    parallel-transported tile-centre north, measured CCW in the
-    tangent plane.  For a spin-2 field Q + iU, a CCW frame rotation
+    parallel-transported tile-centre north, positive toward local west.
+    For a COSMO-convention spin-2 field Q + iU, a frame rotation
     by psi transforms as Q' + iU' = (Q + iU) * exp(-2i*psi), giving:
 
         Q' =  Q cos(2 psi) + U sin(2 psi)
@@ -365,7 +366,7 @@ def _compute_psi(nside, face, tx, ty, tile_nside, ipix_tile):
     safe_nt_norm = np.where(nt_norm > 1e-15, nt_norm, 1.0)
     north_transported /= safe_nt_norm
 
-    # --- psi = angle from local north to transported north (CCW) ---
+    # --- psi = angle from local north to transported north, positive west ---
     cos_psi = np.clip(
         np.sum(north_p * north_transported, axis=1), -1.0, 1.0)
     cross_nt = np.cross(north_p, north_transported)  # (n_pix, 3)
@@ -383,7 +384,8 @@ def _apply_spin2_rotation(Q, U, psi):
     """
     Rotate Q, U by frame rotation angle psi (spin-2 convention).
 
-    For a CCW frame rotation by psi, a spin-2 field transforms as
+    For a COSMO-convention field, with psi positive toward local west,
+    the frame rotation transforms as
     Q' + iU' = (Q + iU) * exp(-2i*psi):
 
         Q' =  Q cos(2 psi) + U sin(2 psi)
@@ -620,7 +622,8 @@ def healpix2tiles(healpix_map, nside, tile_nside, margin, pol=False, nested=Fals
     healpix_map : ndarray
         If ``pol=False``: 1D array of length ``12 * nside**2``.
         If ``pol=True``: shape ``(2, 12 * nside**2)`` where
-        ``[0]`` is Stokes Q and ``[1]`` is Stokes U.
+        ``[0]`` is Stokes Q and ``[1]`` is Stokes U in the
+        HEALPix/COSMO convention (U_COSMO = -U_IAU).
     nside : int
         HEALPix resolution parameter (power of 2).
     tile_nside : int
@@ -651,7 +654,7 @@ def tiles2healpix(tileset, nested=False):
     For scalar maps, the round-trip is lossless.
     For polarisation maps, the inverse spin-2 rotation is applied
     to transform Q and U back from the tile-centre frame to the
-    HEALPix pixel frame.
+    HEALPix pixel frame. Input and output Q/U use the COSMO convention.
 
     Parameters
     ----------

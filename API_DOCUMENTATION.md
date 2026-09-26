@@ -14,8 +14,9 @@ Analyzing spherical maps (like CMB data) using 2D convolutional networks or scat
 To properly handle boundary margins without interpolation, `skykit` uses exact topological boundary unfolding (written in JAX). Out-of-bounds coordinates on a tile are iteratively wrapped across HEALPix boundaries to their exact corresponding pixels on adjacent faces.
 
 **Spin-2 Polarisation (Q/U):**
-Polarisation is a spin-2 field defined relative to the local meridian (North). When projecting onto a flat tile, `skykit` parallel-transports the Q and U Stokes parameters from each pixel's local frame to a unified reference frame at the tile's center. A pixel's rotation angle $\psi$ is computed via Rodriguez's rotation of the center's normal vector. 
-For a counter-clockwise frame rotation $\psi$, the Stokes parameters transform as:
+Polarisation is a spin-2 field defined relative to the local meridian (North). **Input Q/U maps must use the HEALPix/COSMO polarisation convention**, in which $U_{\mathrm{COSMO}}=-U_{\mathrm{IAU}}$ for the same reference axes. No IAU-to-COSMO conversion is performed. Output tiles and maps reconstructed from them retain the COSMO convention.
+
+When projecting onto a flat tile, `skykit` parallel-transports the Q and U Stokes parameters from each pixel's local frame to a unified reference frame at the tile's center. A pixel's rotation angle $\psi$ is computed via Rodrigues rotation of the center's north vector; positive $\psi$ points from local north toward local west. The Stokes parameters transform as:
 $$ Q' = Q \cos(2\psi) + U \sin(2\psi) $$
 $$ U' = -Q \sin(2\psi) + U \cos(2\psi) $$
 
@@ -25,7 +26,7 @@ Pre-computes and caches pixel mappings and polarization rotation angles for HEAL
   - `nside`: HEALPix resolution parameter (power of 2) of the target map.
   - `tile_nside`: Interior side length of each tile. Must divide `nside`.
   - `margin`: Overlap border width appended around the interior. Must be `< nside`.
-  - `pol`: If `True`, computations accommodate an additional polarisation dimension and calculate parallel-transport $\psi$ matrices.
+  - `pol`: If `True`, expects COSMO-convention Q/U and calculates parallel-transport $\psi$ matrices.
 - `map2tiles(healpix_map: np.ndarray, nested: bool = False) -> TileSet`:
   - `healpix_map`: The 1D input array (scalar) or 2D shape `(2, npix)` input trace for `[Q, U]`.
   - `nested`: Selects `nest=True` or `ring` map ordering logic.
@@ -208,18 +209,26 @@ JAX-accelerated class to compute the 2D Wavelet Scattering Transform. The filter
   - On construction, infers `M`, `N` from the shape of the first `psi` filter; infers `J` as `max(j) + 1` and `L` as the number of filters at `j=0`. Stacks and JIT-compiles the filter arrays for fast execution.
 - **Inferred attributes**: `M`, `N`, `J`, `L` — readable after construction.
 - **Methods**:
-  - `transform_tile(x: jnp.ndarray) -> dict`:
+  - `transform_tile(x: ndarray, *, spatial_average: bool = False, return_feature_maps: bool = False) -> dict`:
     - `x`: Input 2D real-valued spatial array of shape `(M, N)`, or shape `(P, M, N)` for polarisation.
+    - `spatial_average`: If true, take the arithmetic mean over the entire tile, including margins, and return one value per scattering path.
+    - `return_feature_maps`: If true, also return the unsmoothed modulus maps `'U1'` and `'U2'`. They retain shape `(J*L, M, N)` and `(n_paths, M, N)` even when `spatial_average=True`.
     - *Returns*: A dictionary with keys:
       - `'S0'`: ndarray of shape `(M, N)` — zeroth-order lowpass averaged map.
       - `'S1'`: ndarray of shape `(J*L, M, N)` — first-order coefficients indexed by `(j, l)` in row-major order.
       - `'S2'`: ndarray of shape `(n_paths, M, N)` — second-order coefficients for all valid `(j1, l1, j2, l2)` pairs with `j2 > j1`.
-  - `transform_tileset(tileset: TileSet) -> dict`:
+    - With `spatial_average=True`, the corresponding shapes are `()`, `(J*L,)`, and `(n_paths,)`. Polarisation adds a leading size-2 axis.
+  - `transform_tileset(tileset: TileSet, *, spatial_average: bool = False, return_feature_maps: bool = False) -> dict`:
     - Computes the scattering transform over all tiles in a `TileSet` in a single vectorised JAX batch.
     - `tileset`: Input `TileSet` of apodized patches. Dimensions `(H, W)` must match `(M, N)`.
+    - `spatial_average` and `return_feature_maps` have the same meanings as for `transform_tile`.
     - *Returns*: A dictionary with keys:
       - `'S0'`: ndarray of shape `(N_tiles, M, N)` — zeroth-order coefficients for every tile.
       - `'S1'`: ndarray of shape `(N_tiles, J*L, M, N)` — first-order coefficients.
       - `'S2'`: ndarray of shape `(N_tiles, n_paths, M, N)` — second-order coefficients.
+    - With `spatial_average=True`, the corresponding shapes are `(N_tiles,)`, `(N_tiles, J*L)`, and `(N_tiles, n_paths)`.
+    - With `return_feature_maps=True`, `'U1'` and `'U2'` are added as unaveraged maps with the same spatial shapes as `'S1'` and `'S2'`.
     - For polarisation `TileSet`s, an extra axis of size 2 (Stokes Q/U) is inserted after `N_tiles`.
     - *Raises*: `ValueError` if tile spatial dimensions do not match `(M, N)`.
+
+`S1` and `S2` always include convolution with the lowpass filter. `U1` and `U2` expose the feature maps before that averaging. Plotting helpers expect spatial maps and cannot display a `spatial_average=True` coefficient directly.

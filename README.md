@@ -40,7 +40,7 @@ Extract HEALPix maps to overlapping squared tiles, apply an apodization window, 
 
 ```python
 import healpy as hp
-from skykit import healpix2tiles, Scattering2D
+from skykit import healpix2tiles, generate_filter_bank, Scattering2D
 from skykit.tile_utils import apply_apodization
 
 # Load HEALPix map
@@ -56,13 +56,22 @@ patch = apodized_tiles.get_tile(face=0, tx=0, ty=0)
 
 # Apply 2D Scattering Transform
 # J = max scales, L = orientations, max_order = depth of transform
-scatter = Scattering2D(M=384, N=384, J=3, L=8, wavelet_type='morlet', max_order=2)
+filters = generate_filter_bank(M=384, N=384, J=3, L=8, wavelet_type='morlet')
+scatter = Scattering2D(filters, max_order=2)
 coeffs = scatter.transform_tile(patch)
 
 # Access Coefficients
 S0 = coeffs['S0']
 S1 = coeffs['S1']
 S2 = coeffs['S2']
+
+# One spatial mean per scattering path, over the full tile
+tile_coeffs = scatter.transform_tile(patch, spatial_average=True)
+
+# Include unaveraged modulus feature maps alongside the scattering coefficients
+with_features = scatter.transform_tile(patch, return_feature_maps=True)
+U1 = with_features['U1']
+U2 = with_features['U2']
 ```
 
 ## Examples
