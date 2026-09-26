@@ -78,6 +78,15 @@ U2 = with_features['U2']
 A detailed walkthrough is provided in the Jupyter Notebook: `examples/test_scattering.ipynb`.
 It covers filter-bank visualization, tile extraction on real maps (Planck PR3), transform computation, and coefficient visualization ($S_0$, $S_1$, $S_2$).
 
+## Documentation
+
+The Sphinx documentation is in [`docs/`](docs/index.md) and is configured for Read the Docs with the Sphinx Awesome Theme. To build it locally:
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -b html -W docs docs/_build/html
+```
+
 ## Testing
 `skykit` uses Python's standard `unittest` framework to verify module logic. To run the tests, execute:
 ```bash
