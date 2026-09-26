@@ -1,8 +1,14 @@
+"""Fourier-domain filters and dyadic banks for planar tile scattering.
+
+Frequencies use unshifted FFT bins in cycles per tile pixel. Filter angles
+refer to tile array axes, not celestial directions.
+"""
+
 import numpy as np
 import jax.numpy as jnp
 
 def _compute_grid(M, N):
-    """Generate centred frequency grid (-0.5 to 0.5) for an M x N image."""
+    """Generate the unshifted FFT frequency grid for an M by N tile."""
     # jnp.fft.fftfreq returns [0, 1/M, ..., 0.5, -0.5+1/M, ..., -1/M]
     # We want the unshifted grid to apply functions, then we can shift or keep as is.
     # It's usually easiest to evaluate directly on the fftfreq grid.
@@ -18,15 +24,15 @@ def gabor_2d(M, N, sigma, theta, xi, slant=0.5):
     Parameters
     ----------
     M, N : int
-        Spatial dimensions of the patch.
+        Spatial dimensions of the tile in pixels.
     sigma : float
-        Bandwidth parameter.
+        Fourier standard deviation along the wavevector, in cycles per pixel.
     theta : float
-        Orientation angle in radians.
+        Wavevector angle from the first tile-array axis, in radians.
     xi : float
-        Central frequency.
+        Carrier frequency in cycles per pixel.
     slant : float
-        Slant (aspect ratio) of the envelope.
+        Ratio of transverse to longitudinal Fourier width.
     """
     u, v = _compute_grid(M, N)
     
@@ -47,15 +53,16 @@ def morlet_2d(M, N, sigma, theta, xi, slant=0.5):
     Parameters
     ----------
     M, N : int
-        Spatial dimensions.
+        Spatial dimensions of the tile in pixels.
     sigma : float
-        Bandwidth parameter.
+        Fourier width along the wavevector, in cycles per pixel.
     theta : float
-        Orientation angle in radians.
+        Wavevector angle from the first tile-array axis, in radians.
     xi : float
-        Central frequency.
+        Nominal carrier frequency in cycles per pixel; the zero-mean
+        correction may move the actual filter peak.
     slant : float
-        Slant (aspect ratio) of the envelope.
+        Ratio of transverse to longitudinal Fourier width.
     """
     # Gabor term
     gabor = gabor_2d(M, N, sigma, theta, xi, slant=slant)
@@ -80,9 +87,9 @@ def lowpass_2d(M, N, sigma):
     Parameters
     ----------
     M, N : int
-        Spatial dimensions.
+        Spatial dimensions of the tile in pixels.
     sigma : float
-        Bandwidth parameter. Controls the cutoff frequency of the lowpass.
+        Gaussian Fourier standard deviation in cycles per pixel.
     """
     u, v = _compute_grid(M, N)
     arg = (u**2 + v**2) / (2 * sigma**2)
@@ -97,11 +104,9 @@ def bump_2d(M, N, sigma, theta, xi, slant=0.5):
     ``(xi, 0)`` in the rotated coordinate frame, where ``d²`` is the
     normalised squared distance from the centre.
 
-    This is an **analytic** (one-sided) directional wavelet: support exists
-    only at the positive-frequency lobe ``+xi``, not the conjugate ``-xi``
-    lobe.  The resulting spatial filter is therefore complex, analogous to
-    the Morlet/Gabor wavelets.  This is the standard convention for
-    scattering transforms (the modulus discards phase).
+    When ``xi >= sigma``, the support stays on the positive-frequency side
+    and excludes DC. The spatial filter is then complex and directional.
+    For ``xi < sigma``, the support includes DC, so it is not zero-mean.
 
     It is *not* the symmetric real-valued bump steerable wavelet of
     Simoncelli & Freeman (1995), which carries both ``±xi`` lobes and
@@ -132,19 +137,23 @@ def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8, xi0=np.p
     Parameters
     ----------
     M, N : int
-        Spatial dimensions.
+        Spatial dimensions of the tile in pixels.
     J : int
-        Maximum scale.
+        Number of wavelet scales, indexed from 0 to J-1. The lowpass is at J.
     L : int
-        Number of orientations.
+        Number of wavevector directions spanning [0, pi), relative to the
+        first tile-array axis.
     wavelet_type : str
         'morlet', 'gabor', or 'bump'.
     sigma0 : float
-        Base bandwidth.
+        Base spatial scale in pixels. The Gaussian envelope has this spatial
+        standard deviation along its wavevector at scale zero.
     xi0 : float
-        Base centre frequency.
+        Base carrier parameter. As implemented, the nominal scale-zero
+        frequency is ``xi0 / pi`` cycles per pixel, equivalent to
+        ``2 * xi0`` radians per pixel.
     slant : float
-        Slant (aspect ratio).
+        Ratio of transverse to longitudinal Fourier width.
         
     Returns
     -------

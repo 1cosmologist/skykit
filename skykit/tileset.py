@@ -1,3 +1,5 @@
+"""Container and lookup helpers for overlapping HEALPix tiles."""
+
 import numpy as np
 import healpy as hp
 
@@ -96,5 +98,4 @@ class TileSet:
             f"tile_full={self.tile_full}, "
             f"data.shape={self.data.shape})"
         )
-
 

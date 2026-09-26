@@ -4,13 +4,13 @@ healpix_tiling: Decompose HEALPix maps into overlapping square tiles and back.
 Supports scalar (intensity/temperature) maps and spin-2 polarisation
 (Stokes Q/U) maps.  For polarisation, Q and U values are parallel-
 transported to a common reference frame at the tile centre using
-quaternion rotations, so that each tile has a self-consistent
+great-circle rotations, so that each tile has a self-consistent
 polarisation convention. Input Q/U maps must use the HEALPix/COSMO
 convention (U_COSMO = -U_IAU); no convention conversion is performed.
 
-Border pixels are resolved by exact topological boundary unfolding. Any gaps in
-the margins (topological singularities) are rebinned by averaging the 
-ambiguous mappings. This acts directly on real pixel values (no interpolation).
+With the topological margin method, face boundaries are unfolded. Where the
+two boundary traversal orders select different pixels near a vertex, their
+map values are averaged.
 """
 
 import numpy as np
@@ -426,6 +426,21 @@ class HealpixTileProjector:
 
     Use this class to transform multiple maps with the same geometry
     to avoid recalculating coordinates and rotation angles.
+
+    Parameters
+    ----------
+    nside : int
+        HEALPix resolution; must be a power of two.
+    tile_nside : int
+        Side length of each tile interior in pixels; must divide ``nside``.
+    margin : int
+        Margin width on each side, less than ``nside``.
+    pol : bool, optional
+        Treat maps as COSMO-convention Q/U and rotate them into each tile's
+        transported centre frame.
+    margin_method : {'topological', 'geometric'}, optional
+        Select face-boundary unfolding or 3D vector extrapolation for margin
+        pixels. Tile interiors are identical for both methods.
     """
     def __init__(self, nside, tile_nside, margin, pol=False, margin_method='topological'):
         _validate_inputs(nside, tile_nside, margin)
@@ -527,6 +542,19 @@ class HealpixTileProjector:
     def map2tiles(self, healpix_map, nested=False):
         """
         Decompose a HEALPix map into overlapping square tiles.
+
+        Parameters
+        ----------
+        healpix_map : ndarray
+            Scalar map with shape ``(12 * nside**2,)``, or COSMO Q/U maps
+            with shape ``(2, 12 * nside**2)`` when ``pol=True``.
+        nested : bool, optional
+            Set to True for a NESTED input; False expects RING ordering.
+
+        Returns
+        -------
+        TileSet
+            Tiles with the selected margin method and cached geometry.
         """
         npix = 12 * self.nside * self.nside
         healpix_map = np.asarray(healpix_map, dtype=np.float64)
@@ -569,7 +597,22 @@ class HealpixTileProjector:
 
     def tiles2map(self, tileset, nested=False):
         """
-        Reconstruct a HEALPix map from a TileSet.
+        Reconstruct a HEALPix map from tile interiors.
+
+        Margins are discarded. For polarisation, the centre-frame rotation
+        is reversed and the output remains in the COSMO convention.
+
+        Parameters
+        ----------
+        tileset : TileSet
+            Tiles with geometry matching this projector.
+        nested : bool, optional
+            Set to True for NESTED output; False returns RING ordering.
+
+        Returns
+        -------
+        ndarray
+            Scalar map or a ``(Q, U)`` array in HEALPix pixel order.
         """
         npix = 12 * self.nside * self.nside
         m = self.margin

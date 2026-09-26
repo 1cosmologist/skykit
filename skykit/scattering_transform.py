@@ -1,3 +1,5 @@
+"""Undecimated two-dimensional scattering on scalar tile arrays."""
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -218,12 +220,12 @@ class Scattering2D:
         Returns
         -------
         coeffs : dict
-            A dictionary containing numpy arrays with the scattering coefficients:
-            - 'S0' : shape (H, W) or (P, H, W); scalar or (P,) when averaged
-            - 'S1' : shape (N_paths_level1, H, W) or (P, N_paths_level1, H, W);
-              shape (N_paths_level1,) or (P, N_paths_level1) when averaged
-            - 'S2' : analogous to 'S1' for second-order paths
-            Optional 'U1' and 'U2' are always feature maps.
+            Contains ``S0``, ``S1``, and ``S2`` as NumPy arrays.
+            ``S0`` has shape ``(H, W)`` or ``(P, H, W)``;
+            ``S1`` has a scattering-path axis before the spatial axes,
+            and ``S2`` is analogous. With ``spatial_average=True`` the
+            spatial axes are removed. Optional ``U1`` and ``U2`` always
+            retain their spatial axes.
         """
         import numpy as np
         

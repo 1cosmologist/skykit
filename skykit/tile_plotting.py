@@ -1,3 +1,5 @@
+"""Flat and WCS-based plotting helpers for tiles and scattering outputs."""
+
 import numpy as np
 import healpy as hp
 from astropy.wcs import WCS
@@ -452,4 +454,3 @@ def plot_scattering_tile(coeffs, order=1, path_idx=0, dpi=None, title=None, **kw
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     return fig
-

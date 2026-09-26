@@ -1,3 +1,5 @@
+"""Apodization and HDF5 serialization helpers for tile sets."""
+
 import numpy as np
 import h5py
 
@@ -21,12 +23,9 @@ def create_apodization_window(tile_nside, margin, taper_width=None, taper_type='
         By default, it is equal to `margin`. Cannot exceed `margin`. 
         If smaller than `margin`, the extra outer pixels are padded with exactly 0.0.
     taper_type : str
-        The function used to taper the margins. Options:
-        - 'nuttall': A Nuttall window with continuous first derivatives and very low side-lobes.
-          Excellent for strongly suppressing spectral leakage in FFTs.
-        - 'cosine' (default): A Hann/Tukey-like squared-sine taper. Very smooth 
-          derivatives, excellent for isolating the interior.
-        - 'sine': A steeper sine quarter-wave taper.
+        The function used to taper the margins. ``'nuttall'`` has low
+        side-lobes, ``'cosine'`` (default) is a squared-sine taper, and
+        ``'sine'`` is a quarter-wave taper.
 
     Returns
     -------
@@ -196,4 +195,3 @@ def read_tileset_hdf5(filepath):
         data = f['data'][:]
                 
         return TileSet(data, nside, tile_nside, margin, pol=pol)
-
