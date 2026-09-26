@@ -29,6 +29,24 @@ html_title = f"Skykit {release}"
 html_theme_options = {
     "page_layout": "compact",
     "accent_color": "ruby",
+    "nav_links": [
+        {"title": "Home", "url": "index"},
+        {"title": "HEALPix tiling", "url": "tiling"},
+        {"title": "Wavelets & scattering", "url": "wavelets-scattering"},
+        {
+            "title": "API reference",
+            "url": "api",
+            "children": [
+                {"title": "API overview", "url": "api"},
+                {"title": "HEALPix tiling", "url": "api/healpix_tiling"},
+                {"title": "TileSet", "url": "api/tileset"},
+                {"title": "Tile utilities", "url": "api/tile_utils"},
+                {"title": "Wavelet filters", "url": "api/jax_wavelets"},
+                {"title": "Scattering transform", "url": "api/scattering_transform"},
+                {"title": "Plotting", "url": "api/tile_plotting"},
+            ],
+        },
+    ],
 }
 
 templates_path = ["_templates"]
