@@ -26,4 +26,11 @@ autodoc_default_options = {"member-order": "bysource"}
 html_theme = "shibuya"
 html_title = f"Skykit {release}"
 
+html_theme_options = {
+    "page_layout": "compact",
+    "accent_color": "ruby",
+}
+
+templates_path = ["_templates"]
+
 exclude_patterns = ["_build"]
