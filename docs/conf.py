@@ -28,6 +28,7 @@ html_title = f"Skykit {release}"
 
 html_theme_options = {
     "page_layout": "compact",
+    "color_mode": "dark",
     "accent_color": "ruby",
     "nav_links": [
         {"title": "HEALPix tiling", "url": "tiling"},
