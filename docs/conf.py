@@ -30,7 +30,6 @@ html_theme_options = {
     "page_layout": "compact",
     "accent_color": "ruby",
     "nav_links": [
-        {"title": "Home", "url": "index"},
         {"title": "HEALPix tiling", "url": "tiling"},
         {"title": "Wavelets & scattering", "url": "wavelets-scattering"},
         {
