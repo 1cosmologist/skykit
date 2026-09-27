@@ -1,7 +1,7 @@
 html.light {
-    --sy-c-heading: 'ruby';
+    --sy-c-heading: #E0115F;
 }
   
 html.dark {
-    --sy-c-heading: 'ruby';
+    --sy-c-heading: #E0115F;
 }
