@@ -3,7 +3,7 @@ skykit package initialization.
 """
 
 from .healpix_tiling import HealpixTileProjector, healpix2tiles, tiles2healpix
-from .jax_wavelets import gabor_2d, morlet_2d, lowpass_2d, bump_2d, generate_filter_bank
+from .jax_wavelets import gabor_2d, morlet_2d, lowpass_2d, bump_2d, bump_steerable_2d, generate_filter_bank
 from .wavelet_transform import wavelet_transform_tile
 from .feature_maps import FeatureMap, FeatureMapSet, open_feature_maps
 from .scattering_transform import ScatteringStatistics, scattering_transform
@@ -19,6 +19,7 @@ __all__ = [
     "morlet_2d",
     "lowpass_2d",
     "bump_2d",
+    "bump_steerable_2d",
     "generate_filter_bank",
     "wavelet_transform_tile",
     "FeatureMap",

@@ -6,6 +6,7 @@ refer to tile array axes, not celestial directions.
 
 import numpy as np
 import jax.numpy as jnp
+from math import comb, sqrt
 
 def _compute_grid(M, N):
     """Generate the unshifted FFT frequency grid for an M by N tile."""
@@ -108,9 +109,9 @@ def bump_2d(M, N, sigma, theta, xi, slant=0.5):
     and excludes DC. The spatial filter is then complex and directional.
     For ``xi < sigma``, the support includes DC, so it is not zero-mean.
 
-    It is *not* the symmetric real-valued bump steerable wavelet of
-    Simoncelli & Freeman (1995), which carries both ``±xi`` lobes and
-    produces a real spatial filter.
+    It is not the half-plane angular bump-steerable filter implemented by
+    ``bump_steerable_2d``. Its rotated elliptical supports do not form a
+    finite steering basis, even when this filter has an analytic response.
 
     The compact Fourier support avoids inter-scale aliasing better than
     Gaussian-tailed wavelets on finite grids.
@@ -130,7 +131,63 @@ def bump_2d(M, N, sigma, theta, xi, slant=0.5):
     val = val * jnp.exp(1.0)
     return jnp.where(mask, val, 0.0)
 
-def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8, xi0=np.pi/4.0, slant=0.5):
+def bump_steerable_2d(M, N, j, theta, L, xi0=0.45 * np.pi):
+    """Fourier-domain analytic bump with a half-plane angular profile.
+
+    The radial bump peaks at ``xi0 / 2**j`` radians per pixel and is supported
+    on ``0 < |k| < 2 * xi0 / 2**j``. The angular factor is
+    ``max(cos(arg(k) - theta), 0)**(L-1)``. Its positive-frequency support
+    gives a complex spatial response. The normalization covers the angular
+    energy of the L filters and their conjugate antipodal orientations; it
+    does not normalize the complete multiscale filter bank.
+
+    Parameters
+    ----------
+    M, N : int
+        Tile dimensions.
+    j : int
+        Dyadic scale, starting at zero.
+    theta : float
+        Wavevector direction from the first tile axis, in radians.
+    L : int
+        Number of directions in ``[0, pi)``; at least two.
+    xi0 : float
+        Scale-zero radial peak in radians per pixel. Must be in ``(0, pi/2)``
+        so the finest-scale support stays inside the Nyquist disk.
+
+    Notes
+    -----
+    The half-plane cutoff makes the whole complex filter only approximately
+    steerable from finitely many orientations. For odd L its real spatial
+    component is exactly steerable; for even L its imaginary component is.
+    """
+    if not isinstance(L, (int, np.integer)) or L < 2:
+        raise ValueError("L must be an integer >= 2")
+    if not isinstance(j, (int, np.integer)) or j < 0:
+        raise ValueError("j must be a nonnegative integer")
+    if not np.isfinite(xi0) or not 0 < xi0 < np.pi / 2:
+        raise ValueError("xi0 must be in (0, pi/2) radians per pixel")
+
+    u, v = _compute_grid(M, N)
+    kx, ky = 2 * jnp.pi * u, 2 * jnp.pi * v
+    r = jnp.hypot(kx, ky)
+    xi = xi0 * 2.0 ** (-j)
+
+    t = (r - xi) / xi
+    inside = jnp.abs(t) < 1.0
+    safe_t = jnp.where(inside, t, 0.0)
+    radial = jnp.where(inside, jnp.exp(-safe_t**2 / (1.0 - safe_t**2)), 0.0)
+
+    r_safe = jnp.where(r > 0, r, 1.0)
+    directional_cosine = (kx * jnp.cos(theta) + ky * jnp.sin(theta)) / r_safe
+    angular = jnp.maximum(jnp.clip(directional_cosine, -1.0, 1.0), 0.0) ** (L - 1)
+    alpha = sqrt(4 ** (L - 1) / (L * comb(2 * (L - 1), L - 1)))
+    return alpha * radial * angular
+
+
+def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8,
+                         xi0=np.pi/4.0, slant=0.5,
+                         bump_steerable_xi0=0.45 * np.pi):
     """
     Generate a complete filter bank (wavelets and low-pass) for 2D scattering.
     
@@ -144,16 +201,21 @@ def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8, xi0=np.p
         Number of wavevector directions spanning [0, pi), relative to the
         first tile-array axis.
     wavelet_type : str
-        'morlet', 'gabor', or 'bump'.
+        'morlet', 'gabor', 'bump', or 'bump_steerable'.
     sigma0 : float
         Base spatial scale in pixels. The Gaussian envelope has this spatial
-        standard deviation along its wavevector at scale zero.
+        standard deviation along its wavevector at scale zero. For
+        'bump_steerable', it controls only the lowpass filter.
     xi0 : float
-        Base carrier parameter. As implemented, the nominal scale-zero
+        Base carrier parameter for 'morlet', 'gabor', and 'bump'. The nominal scale-zero
         frequency is ``xi0 / pi`` cycles per pixel, equivalent to
-        ``2 * xi0`` radians per pixel.
+        ``2 * xi0`` radians per pixel. Not used by 'bump_steerable'.
     slant : float
         Ratio of transverse to longitudinal Fourier width.
+        Not used by 'bump_steerable'.
+    bump_steerable_xi0 : float
+        Scale-zero radial peak for 'bump_steerable', in radians per pixel.
+        Kept separate from ``xi0``, which has different units and semantics.
         
     Returns
     -------
@@ -170,22 +232,25 @@ def generate_filter_bank(M, N, J, L, wavelet_type='morlet', sigma0=0.8, xi0=np.p
         wav_func = gabor_2d
     elif wavelet_type == 'bump':
         wav_func = bump_2d
+    elif wavelet_type == 'bump_steerable':
+        wav_func = None
     else:
         raise ValueError(f"Unknown wavelet_type: {wavelet_type}")
         
     # Generate wavelets for each scale and orientation
     for j in range(J):
-        # Scale the frequency and bandwidth
-        sigma_j = sigma0 * (2 ** j)
-        # Using a normalized frequency grid [-0.5, 0.5], so we divide xi by 2^j but also scale it to match FFT frequencies
-        # Standard Kymatio definitions often base xi on pixel units
-        xi_j = (xi0 / np.pi) / (2 ** j)
-        # sigma in frequency coords is 1 / (spatial sigma)
-        sigma_f = 1.0 / (sigma_j * 2 * np.pi)
+        if wavelet_type != 'bump_steerable':
+            sigma_j = sigma0 * (2 ** j)
+            xi_j = (xi0 / np.pi) / (2 ** j)
+            sigma_f = 1.0 / (sigma_j * 2 * np.pi)
         
         for l in range(L):
             theta = l * np.pi / L
-            f_val = wav_func(M, N, sigma_f, theta, xi_j, slant=slant)
+            if wavelet_type == 'bump_steerable':
+                f_val = bump_steerable_2d(
+                    M, N, j, theta, L, xi0=bump_steerable_xi0)
+            else:
+                f_val = wav_func(M, N, sigma_f, theta, xi_j, slant=slant)
             filters['psi'].append({
                 'j': j,
                 'theta': theta,

@@ -7,7 +7,7 @@ Skykit turns HEALPix maps into overlapping square tiles and computes two-dimensi
 ## What it provides
 
 - HEALPix tiling with topological or geometric margin assignment, and reconstruction from tile interiors.
-- Fourier-domain Morlet, Gabor, and bump filter banks.
+- Fourier-domain Morlet, Gabor, elliptical bump, and analytic bump steerable filter banks.
 - JAX first- and second-order wavelet feature maps with scale and orientation paths.
 - Mean, variance, and cross scattering statistics from feature maps.
 - HDF5 feature-map storage, apodization windows, HDF5 tile storage, and plotting helpers.
@@ -49,6 +49,8 @@ with wavelet_transform_tile(tiles, filters, order=2,
 ```
 
 `single` is a `FeatureMap`; `features` is a `FeatureMapSet`. Their `paths` map each `U1` or `U2` feature axis to its wavelet scales and orientations. `U1 = x * ψ₁` and `U2 = |U1| * ψ₂` are complex arrays. `statistics` is a `ScatteringStatistics` object with corresponding `values` and `paths`. Use `reduction="variance"` for pixel variance and `operation1`/`operation2` for any additional modulus or other JAX operation. With two sets, `cross` contains only path-pair statistics. HDF5 files store the complex maps and paths together and are read in tile and path batches.
+
+For the analytic bump steerable filter, set `wavelet_type="bump_steerable"` when creating the bank. Its separate `bump_steerable_xi0` parameter defaults to `0.45 * np.pi` radians per pixel; `L=4` gives four directions over `[0, π)`.
 
 `healpix2tiles` expects RING ordering by default; use `nested=True` for a NESTED map. With `pol=True`, Q/U input must use the HEALPix/COSMO convention.
 

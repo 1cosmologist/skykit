@@ -42,7 +42,26 @@ $$
 \end{cases}
 $$
 
-Its Fourier support is compact. It has zero DC response only when $\xi\geq\sigma_f$. The lowpass filter is isotropic:
+Its Fourier support is compact. It has zero DC response only when $\xi\geq\sigma_f$. This shifted elliptical bump is distinct from the analytic bump steerable filter below.
+
+For **`bump_steerable`**, use angular frequency $\mathbf{k}=2\pi(u,v)$ in radians per pixel, $r=|\mathbf{k}|$, and $\xi_j=\texttt{bump\_steerable\_xi0}\,2^{-j}$. With $q=(r-\xi_j)/\xi_j$, define
+
+$$
+R_j(r)=
+\begin{cases}
+\exp\!\left(-\dfrac{q^2}{1-q^2}\right),&|q|<1,\\
+0,&|q|\geq1,
+\end{cases}
+\qquad
+\widehat\psi_{j,\theta}(\mathbf{k})
+=\alpha_L R_j(r)[\max(0,\cos(\varphi-\theta))]^{L-1},
+$$
+
+where $\varphi=\operatorname{atan2}(k_y,k_x)$ and $\alpha_L=2^{L-1}(L-1)!/\sqrt{L(2L-2)!}$. The radial response peaks at $r=\xi_j$ and is supported on $0<r<2\xi_j$. The angular response is restricted to the half-plane around $\theta$. The spectrum is real and one-sided, so its spatial response is complex; the wavelet transform preserves that imaginary part. The normalization makes angular energy uniform when the $L$ stored directions and their conjugate antipodes are counted together. It does not make the multiscale bank a tight frame.
+
+For a real input, the response at $\theta+\pi$ is the conjugate of the response at $\theta$, so only $L$ directions on $[0,\pi)$ are stored. The full complex filter is only approximately steerable from finitely many directions because of the half-plane cutoff. For odd $L$ its real spatial component is exactly steerable; for even $L$ its imaginary component is. `L=4` gives directions at 0°, 45°, 90°, and 135°.
+
+The lowpass filter is isotropic:
 
 $$
 \widehat\phi_J(u,v)=\exp\!\left[-\frac{u^2+v^2}{2\sigma_{J,f}^2}\right],
@@ -60,12 +79,21 @@ For Gabor and Morlet, the Fourier width parallel to the wavevector is $\sigma_f$
 | `M`, `N` | Tile dimensions in pixels. FFT-bin spacing is $1/M$ and $1/N$ cycles per pixel. |
 | `J` | Number of wavelet scales $j=0,\ldots,J-1$; the lowpass uses scale $J$. |
 | `L` | Number of orientations, $\theta_l=l\pi/L$ for $l=0,\ldots,L-1$. |
-| `wavelet_type` | `"morlet"`, `"gabor"`, or `"bump"`. |
-| `sigma0` | Base spatial scale in pixels. At scale $j$, $\sigma_j=\texttt{sigma0}\,2^j$ and $\sigma_{j,f}=1/(2\pi\sigma_j)$ cycles per pixel. For the Gaussian envelope, $\sigma_j$ is the spatial standard deviation along the wavevector. |
-| `xi0` | Base carrier parameter. **As implemented**, $\xi_j=\texttt{xi0}/(\pi2^j)$ cycles per pixel, or angular frequency $2\,\texttt{xi0}/2^j$ radians per pixel. The input parameter is therefore half the scale-zero angular carrier frequency. |
-| `slant` | Ratio of transverse to longitudinal Fourier width. The default `0.5` makes the transverse width half as large. |
+| `wavelet_type` | `"morlet"`, `"gabor"`, `"bump"`, or `"bump_steerable"`. |
+| `sigma0` | Base spatial scale in pixels. At scale $j$, $\sigma_j=\texttt{sigma0}\,2^j$ and $\sigma_{j,f}=1/(2\pi\sigma_j)$ cycles per pixel. For Gaussian filters this is the envelope width; it also sets the bank's lowpass width. |
+| `xi0` | Carrier parameter for Morlet, Gabor, and the elliptical bump. The nominal scale-zero frequency is $\texttt{xi0}/\pi$ cycles per pixel, or $2\,\texttt{xi0}$ radians per pixel. It does not affect `bump_steerable`. |
+| `slant` | Ratio of transverse to longitudinal Fourier width for Morlet, Gabor, and the elliptical bump. It does not affect `bump_steerable`. |
+| `bump_steerable_xi0` | Scale-zero radial peak for `bump_steerable`, in **radians per pixel**. The default is $0.45\pi$. It must lie in $(0,\pi/2)$, keeping the finest-scale radial support inside the Nyquist disk. |
 
 The lowpass uses $\sigma_J=\texttt{sigma0}\,2^J$ and $\sigma_{J,f}=1/(2\pi\sigma_J)$. With the current default `xi0=π/4`, the nominal scale-zero carrier is $0.25$ cycles per pixel, a four-pixel period. `xi0` is not interchangeable with Kymatio's radians-per-pixel carrier parameter; equal numerical values give different filters.
+
+To use the analytic bump steerable bank with four stored directions:
+
+```python
+filters = generate_filter_bank(M, N, J=3, L=4,
+                               wavelet_type="bump_steerable",
+                               bump_steerable_xi0=0.45 * np.pi)
+```
 
 ## Scattering paths and outputs
 
