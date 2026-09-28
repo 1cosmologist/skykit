@@ -27,7 +27,8 @@ The package imports its HEALPix and plotting modules at startup, so `healpy`, `a
 import healpy as hp
 import numpy as np
 
-from skykit import Scattering2D, apply_apodization, generate_filter_bank, healpix2tiles
+from skykit import (Scattering2D, apply_apodization, generate_filter_bank,
+                    healpix2tiles, compute_scattering_statistics)
 
 nside = 32
 sky_map = np.random.default_rng(0).normal(size=hp.nside2npix(nside))
@@ -39,9 +40,18 @@ scattering = Scattering2D(filters, max_order=2)
 
 coefficient_maps = scattering.transform_tile(tiles.get_tile(0, 0, 0))
 tile_values = scattering.transform_tileset(tiles, spatial_average=True)
+
+# Reduce precomputed feature maps, optionally comparing two map sets.
+features = scattering.transform_tileset(
+    tiles, spatial_average=True, return_feature_maps=True,
+    batch_size=4, feature_map_file="feature_maps.h5")
+statistics = compute_scattering_statistics("feature_maps.h5")
+cross = compute_scattering_statistics("feature_maps.h5", "other_feature_maps.h5")
 ```
 
 `coefficient_maps` contains lowpass-averaged `S0`, `S1`, and `S2` maps. `tile_values` contains one mean over the full tile for each scattering path. Pass `return_feature_maps=True` to either transform method to also obtain the unaveraged `U1` and `U2` maps.
+
+`statistics` has one value per tile and feature path. `cross` contains only pairwise cross values: keys such as `U1_U2` have one axis for each set's wavelet paths. The default is the pixel mean; `reduction="variance"` takes the pixel variance. Use `operation1` and `operation2` for JAX functions applied before reduction, such as `operation1=jax.numpy.square`. Cross statistics reduce the pointwise product of the two operated maps. The HDF5 file holds `U1` and `U2` as separate datasets; statistics read one tile and a small batch of paths at a time. `transform_tile(..., feature_map_file="single_tile.h5", return_feature_maps=True)` supports the same workflow for one tile.
 
 `healpix2tiles` expects RING ordering by default; use `nested=True` for a NESTED map. With `pol=True`, Q/U input must use the HEALPix/COSMO convention.
 

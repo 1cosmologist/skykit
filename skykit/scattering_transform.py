@@ -145,7 +145,8 @@ class Scattering2D:
                     
         return out
 
-    def transform_tileset(self, tileset, *, spatial_average=False, return_feature_maps=False):
+    def transform_tileset(self, tileset, *, spatial_average=False, return_feature_maps=False,
+                          batch_size=None, feature_map_file=None):
         """
         Compute the 2D scattering transform across all tiles in a generic TileSet.
         
@@ -159,6 +160,13 @@ class Scattering2D:
         return_feature_maps : bool, optional
             Also return unsmoothed modulus maps as 'U1' and 'U2'. These keep
             their spatial dimensions even when spatial_average=True.
+        batch_size : int, optional
+            Number of tiles to transform at once. Useful for large tile sets.
+        feature_map_file : path-like, optional
+            Write U1 and U2 directly to one HDF5 file, in tile-sized chunks.
+            Requires ``return_feature_maps=True``. The returned dictionary
+            contains the file path under ``'feature_map_file'`` in place of U
+            arrays; pass that path to ``compute_scattering_statistics``.
         
         Returns
         -------
@@ -168,9 +176,19 @@ class Scattering2D:
             - 'S1' : shape (N_tiles, N_paths_level1, H, W), or (N_tiles, N_paths_level1)
             - 'S2' : shape (N_tiles, N_paths_level2, H, W), or (N_tiles, N_paths_level2)
             Polarisation adds a size-2 axis after N_tiles. Optional 'U1' and
-            'U2' have the corresponding unaveraged map shapes.
+            'U2' have the corresponding unaveraged map shapes when no output
+            file is requested.
         """
+        from contextlib import nullcontext
+        from pathlib import Path
+        import h5py
         import numpy as np
+        from .feature_statistics import _create_dataset
+
+        if feature_map_file is not None and not return_feature_maps:
+            raise ValueError("feature_map_file requires return_feature_maps=True")
+        if batch_size is not None and (not isinstance(batch_size, int) or batch_size < 1):
+            raise ValueError("batch_size must be a positive integer")
         
         # If polarization, we might have shape (N，2, M, N), otherwise (N, M, N)
         if tileset.pol:
@@ -185,24 +203,44 @@ class Scattering2D:
         if H != self.M or W != self.N:
             raise ValueError(f"TileSet dimensions ({H}, {W}) do not match Scattering2D dimensions ({self.M}, {self.N})")
             
-        # JAX requires data transfer to device
-        x_jax = jnp.array(x_in)
-        
-        # Execute JIT-compiled transform vectorised over the full batch
-        out_jax = self._transform_jit(
-            x_jax, spatial_average=spatial_average,
-            return_feature_maps=return_feature_maps,
-        )
-        
-        # Transfer back to host numpy memory
         coeffs = {}
-        for key, value in out_jax.items():
-            arr = np.asarray(value)
-            coeffs[key] = arr.reshape((N_t, P) + arr.shape[1:]) if tileset.pol else arr
+        chunk_size = batch_size or (1 if feature_map_file is not None else N_t)
+        filepath = Path(feature_map_file) if feature_map_file is not None else None
+        context = h5py.File(filepath, "w") if filepath is not None else nullcontext(None)
+        with context as handle:
+            if handle is not None:
+                handle.attrs["single_tile"] = False
+                handle.attrs["pol"] = bool(tileset.pol)
+                handle.attrs["nside"] = tileset.nside
+                handle.attrs["tile_nside"] = tileset.tile_nside
+                handle.attrs["margin"] = tileset.margin
+            for start in range(0, N_t, chunk_size):
+                stop = min(start + chunk_size, N_t)
+                batch = x_in[start * P:stop * P] if tileset.pol else x_in[start:stop]
+                out_jax = self._transform_jit(
+                    jnp.asarray(batch), spatial_average=spatial_average,
+                    return_feature_maps=return_feature_maps,
+                )
+                for key, value in out_jax.items():
+                    arr = np.asarray(value)
+                    if tileset.pol:
+                        arr = arr.reshape((stop - start, P) + arr.shape[1:])
+                    if handle is not None and key in ("U1", "U2"):
+                        if key not in handle:
+                            _create_dataset(handle, key, (N_t,) + arr.shape[1:], arr.dtype,
+                                            single_tile=False, polarized=tileset.pol)
+                        handle[key][start:stop] = arr
+                    else:
+                        if key not in coeffs:
+                            coeffs[key] = np.empty((N_t,) + arr.shape[1:], dtype=arr.dtype)
+                        coeffs[key][start:stop] = arr
+        if filepath is not None:
+            coeffs["feature_map_file"] = filepath
                 
         return coeffs
 
-    def transform_tile(self, tile_data, *, spatial_average=False, return_feature_maps=False):
+    def transform_tile(self, tile_data, *, spatial_average=False, return_feature_maps=False,
+                       feature_map_file=None):
         """
         Compute the 2D scattering transform on a single tile array.
         
@@ -216,6 +254,10 @@ class Scattering2D:
         return_feature_maps : bool, optional
             Also return unsmoothed modulus maps as 'U1' and 'U2'. These keep
             their spatial dimensions even when spatial_average=True.
+        feature_map_file : path-like, optional
+            Save U1 and U2 for this tile to one HDF5 file. Requires
+            ``return_feature_maps=True``. The returned dictionary includes
+            ``'feature_map_file'`` instead of in-memory U arrays.
             
         Returns
         -------
@@ -228,6 +270,11 @@ class Scattering2D:
             retain their spatial axes.
         """
         import numpy as np
+        from pathlib import Path
+        from .feature_statistics import save_feature_maps
+
+        if feature_map_file is not None and not return_feature_maps:
+            raise ValueError("feature_map_file requires return_feature_maps=True")
         
         is_pol = (tile_data.ndim == 3)
         if is_pol:
@@ -255,5 +302,10 @@ class Scattering2D:
             else:
                 # Shape is naturally (P, ...) which is perfectly aligned
                 coeffs[key] = arr
+        if feature_map_file is not None:
+            filepath = save_feature_maps(coeffs, feature_map_file, single_tile=True)
+            coeffs.pop("U1", None)
+            coeffs.pop("U2", None)
+            coeffs["feature_map_file"] = Path(filepath)
                 
         return coeffs

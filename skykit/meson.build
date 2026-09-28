@@ -3,6 +3,7 @@ python_sources = [
   'healpix_tiling.py',
   'jax_wavelets.py',
   'scattering_transform.py',
+  'feature_statistics.py',
   'tile_plotting.py',
   'tile_utils.py',
   'tileset.py'
