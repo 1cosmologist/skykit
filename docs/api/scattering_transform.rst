@@ -2,10 +2,13 @@ Scattering transform (``skykit.scattering_transform``)
 ========================================================
 
 .. automodule:: skykit.scattering_transform
-   :members: Scattering2D
+   :members: scattering_transform, ScatteringStatistics
 
-Feature-map statistics and disk storage
----------------------------------------
+Wavelet features and disk storage
+---------------------------------
 
-.. automodule:: skykit.feature_statistics
-   :members: compute_scattering_statistics, save_feature_maps, open_feature_maps
+.. automodule:: skykit.wavelet_transform
+   :members: wavelet_transform_tile
+
+.. automodule:: skykit.feature_maps
+   :members: FeatureMap, FeatureMapSet, open_feature_maps

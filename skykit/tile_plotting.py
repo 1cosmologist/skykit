@@ -304,20 +304,20 @@ def plot_tile_proj_at(tileset, lon, lat, coord='G', dpi=None, title=None, **kwar
     return plot_tile_proj(tileset, face, tx, ty, coord=coord, dpi=dpi, title=title, **kwargs)
 
 
-def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, coord='G', dpi=None, title=None, **kwargs):
+def plot_scattering_coefs(tileset, feature_maps, face, tx, ty, order=1, path_idx=0, coord='G', dpi=None, title=None, **kwargs):
     '''
-    Plot a specific scattering coefficient map for a tile using its WCS.
+    Plot a wavelet feature map for a tile using its WCS.
 
     Parameters
     ----------
     tileset : TileSet
-        The TileSet object used to generate the scattering coefficients.
-    coeffs : dict
-        The output dictionary from Scattering2D containing 'S0', 'S1', etc.
+        The TileSet used to generate the feature maps.
+    feature_maps : FeatureMapSet
+        Feature maps returned by ``wavelet_transform_tile``.
     face, tx, ty : int
         Tile identifiers to plot.
     order : int
-        The scattering order to plot (0, 1, or 2).
+        The feature order to plot (1 or 2).
     path_idx : int
         The index of the scattering path/frequency to plot (for orders 1 and 2).
     coord : str
@@ -331,21 +331,16 @@ def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, co
     if dpi is not None:
         fig_kwargs['dpi'] = dpi
         
-    if order == 0:
-        if tileset.pol:
-            tile_data = coeffs['S0'][idx] # Shape (P, H, W)
-        else:
-            tile_data = coeffs['S0'][idx] # Shape (H, W)
-        title_suffix = 'S0'
+    if order not in (1, 2):
+        raise ValueError('order must be 1 or 2')
+    key = f'U{order}'
+    if key not in feature_maps.maps:
+        raise KeyError(f'Order {order} feature maps are unavailable')
+    if tileset.pol:
+        tile_data = feature_maps[key][idx, :, path_idx, :, :]
     else:
-        key = f'S{order}'
-        if key not in coeffs:
-            raise KeyError(f'Order {order} coefficients not found in dict.')
-        if tileset.pol:
-            tile_data = coeffs[key][idx, :, path_idx, :, :] # Shape (P, H, W)
-        else:
-            tile_data = coeffs[key][idx, path_idx, :, :] # Shape (H, W)
-        title_suffix = f'S{order} (path index {path_idx})'
+        tile_data = feature_maps[key][idx, path_idx, :, :]
+    title_suffix = f'{key} {feature_maps.paths[key][path_idx]}'
         
     base_title = title if title is not None else f'Face {face} tx {tx} ty {ty}'
         
@@ -374,25 +369,22 @@ def plot_scattering_coefs(tileset, coeffs, face, tx, ty, order=1, path_idx=0, co
     return fig
 
 
-def plot_scattering_tile(coeffs, order=1, path_idx=0, dpi=None, title=None, **kwargs):
+def plot_scattering_tile(feature_maps, order=1, path_idx=0, dpi=None, title=None, **kwargs):
     '''
-    Plot a scattering coefficient map from the output of Scattering2D.transform_tile.
+    Plot a wavelet feature map from one tile without WCS projection.
 
-    Unlike plot_scattering_coefs, this function works directly on the dict returned
-    by a single-tile transform — no TileSet or tile index required.  The image is
+    Unlike plot_scattering_coefs, this function works on a FeatureMap.
+    No TileSet or tile index is required. The image is
     rendered as a flat imshow without WCS projection.
 
     Parameters
     ----------
-    coeffs : dict
-        Output of ``Scattering2D.transform_tile``.  Expected keys:
-        - ``'S0'``: ndarray of shape ``(H, W)`` or ``(P, H, W)``
-        - ``'S1'``: ndarray of shape ``(N_psi, H, W)`` or ``(P, N_psi, H, W)``
-        - ``'S2'``: ndarray of shape ``(N_paths, H, W)`` or ``(P, N_paths, H, W)``
+    feature_maps : FeatureMap
+        Output of ``wavelet_transform_tile`` on one tile.
     order : int, optional
-        Scattering order to display (0, 1, or 2).  Default is 1.
+        Feature order to display (1 or 2). Default is 1.
     path_idx : int, optional
-        Index into the path dimension for orders 1 and 2.  Ignored for order 0.
+        Index into the path dimension.
     dpi : float, optional
         Figure DPI.  Uses matplotlib default when None.
     title : str, optional
@@ -405,32 +397,21 @@ def plot_scattering_tile(coeffs, order=1, path_idx=0, dpi=None, title=None, **kw
     Raises
     ------
     KeyError
-        If the requested scattering order is not present in *coeffs*.
+        If the requested feature order is unavailable.
     '''
-    key = f'S{order}'
-    if key not in coeffs:
-        raise KeyError(f'Order {order} coefficients (key \'{key}\') not found in coeffs dict.')
-
-    raw = coeffs[key]
-
-    # Detect polarisation: S0 is (P, H, W), S1 is (P, N_psi, H, W), etc.
-    # For order 0 pol raw.ndim==3; for order>=1 pol raw.ndim==4.
-    is_pol = (order == 0 and raw.ndim == 3) or (order >= 1 and raw.ndim == 4)
-
-    if order == 0:
-        if is_pol:
-            tile_q = raw[0]
-            tile_u = raw[1]
-        else:
-            tile_data = raw
-        title_suffix = 'S0'
+    if order not in (1, 2):
+        raise ValueError('order must be 1 or 2')
+    key = f'U{order}'
+    if key not in feature_maps.maps:
+        raise KeyError(f'Order {order} feature maps are unavailable')
+    raw = feature_maps[key]
+    is_pol = feature_maps.pol
+    if is_pol:
+        tile_q = raw[0, path_idx]
+        tile_u = raw[1, path_idx]
     else:
-        if is_pol:
-            tile_q = raw[0, path_idx]
-            tile_u = raw[1, path_idx]
-        else:
-            tile_data = raw[path_idx]
-        title_suffix = f'S{order} (path {path_idx})'
+        tile_data = raw[path_idx]
+    title_suffix = f'{key} {feature_maps.paths[key][path_idx]}'
 
     base_title = title if title is not None else title_suffix
 

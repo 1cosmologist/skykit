@@ -8,8 +8,9 @@ Skykit turns HEALPix maps into overlapping square tiles and computes two-dimensi
 
 - HEALPix tiling with topological or geometric margin assignment, and reconstruction from tile interiors.
 - Fourier-domain Morlet, Gabor, and bump filter banks.
-- JAX scattering coefficients at orders 0, 1, and 2, as full-resolution maps or one spatial mean per path and tile.
-- Optional unaveraged modulus feature maps, apodization windows, HDF5 tile storage, and plotting helpers.
+- JAX first- and second-order wavelet feature maps with scale and orientation paths.
+- Mean, variance, and cross scattering statistics from feature maps.
+- HDF5 feature-map storage, apodization windows, HDF5 tile storage, and plotting helpers.
 
 ## Install
 
@@ -27,8 +28,8 @@ The package imports its HEALPix and plotting modules at startup, so `healpy`, `a
 import healpy as hp
 import numpy as np
 
-from skykit import (Scattering2D, apply_apodization, generate_filter_bank,
-                    healpix2tiles, compute_scattering_statistics)
+from skykit import (apply_apodization, generate_filter_bank, healpix2tiles,
+                    scattering_transform, wavelet_transform_tile)
 
 nside = 32
 sky_map = np.random.default_rng(0).normal(size=hp.nside2npix(nside))
@@ -36,22 +37,16 @@ tiles = healpix2tiles(sky_map, nside=nside, tile_nside=16, margin=4)
 tiles = apply_apodization(tiles)
 
 filters = generate_filter_bank(tiles.tile_full, tiles.tile_full, J=2, L=4)
-scattering = Scattering2D(filters, max_order=2)
+single = wavelet_transform_tile(tiles.get_tile(0, 0, 0), filters, order=2)
+single_stats = scattering_transform(single)
 
-coefficient_maps = scattering.transform_tile(tiles.get_tile(0, 0, 0))
-tile_values = scattering.transform_tileset(tiles, spatial_average=True)
-
-# Reduce precomputed feature maps, optionally comparing two map sets.
-features = scattering.transform_tileset(
-    tiles, spatial_average=True, return_feature_maps=True,
-    batch_size=4, feature_map_file="feature_maps.h5")
-statistics = compute_scattering_statistics("feature_maps.h5")
-cross = compute_scattering_statistics("feature_maps.h5", "other_feature_maps.h5")
+with wavelet_transform_tile(tiles, filters, order=2,
+                            filepath="feature_maps.h5", batch_size=4) as features:
+    statistics = scattering_transform(features)
+    cross = scattering_transform(features, features)
 ```
 
-`coefficient_maps` contains lowpass-averaged `S0`, `S1`, and `S2` maps. `tile_values` contains one mean over the full tile for each scattering path. Pass `return_feature_maps=True` to either transform method to also obtain the unaveraged `U1` and `U2` maps.
-
-`statistics` has one value per tile and feature path. `cross` contains only pairwise cross values: keys such as `U1_U2` have one axis for each set's wavelet paths. The default is the pixel mean; `reduction="variance"` takes the pixel variance. Use `operation1` and `operation2` for JAX functions applied before reduction, such as `operation1=jax.numpy.square`. Cross statistics reduce the pointwise product of the two operated maps. The HDF5 file holds `U1` and `U2` as separate datasets; statistics read one tile and a small batch of paths at a time. `transform_tile(..., feature_map_file="single_tile.h5", return_feature_maps=True)` supports the same workflow for one tile.
+`single` is a `FeatureMap`; `features` is a `FeatureMapSet`. Their `paths` map each `U1` or `U2` feature axis to its wavelet scales and orientations. `statistics` is a `ScatteringStatistics` object with corresponding `values` and `paths`. Use `reduction="variance"` for pixel variance and `operation1`/`operation2` for JAX functions applied before reduction. With two sets, `cross` contains only path-pair statistics. HDF5 files store the maps and paths together and are read in tile and path batches.
 
 `healpix2tiles` expects RING ordering by default; use `nested=True` for a NESTED map. With `pol=True`, Q/U input must use the HEALPix/COSMO convention.
 
@@ -61,7 +56,7 @@ cross = compute_scattering_statistics("feature_maps.h5", "other_feature_maps.h5"
 - [Wavelet and scattering mathematics](https://skykit.readthedocs.io/en/latest/wavelets-scattering.html)
 - [API reference](https://skykit.readthedocs.io/en/latest/api.html)
 
-The [example notebook](examples/test_scattering.ipynb) shows the workflow on astrophysical maps.
+The scattering guide describes the wavelet paths and statistics workflow.
 
 ## Development
 

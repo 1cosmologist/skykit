@@ -72,26 +72,23 @@ The lowpass uses $\sigma_J=\texttt{sigma0}\,2^J$ and $\sigma_{J,f}=1/(2\pi\sigma
 For periodic convolution $*$ on a tile, the implemented paths are
 
 $$
-S_0x=x*\phi_J,\qquad
-U_1(j_1,\theta_1)x=|x*\psi_{j_1,\theta_1}|,\qquad
-S_1=U_1*\phi_J,
+U_1(j_1,\theta_1)x=|x*\psi_{j_1,\theta_1}|.
 $$
 
 $$
 U_2(j_1,\theta_1,j_2,\theta_2)x
-=|U_1(j_1,\theta_1)x*\psi_{j_2,\theta_2}|,\qquad
-S_2=U_2*\phi_J,
-\quad j_2>j_1.
+=|U_1(j_1,\theta_1)x*\psi_{j_2,\theta_2}|,
+\qquad j_2>j_1.
 $$
 
-{py:class}`skykit.scattering_transform.Scattering2D` returns full-resolution `S0`, `S1`, and `S2` maps by default. `return_feature_maps=True` adds the unsmoothed modulus maps `U1` and `U2`. `spatial_average=True` returns one mean value per tile and path over the **entire tile, including margins**. Because $\widehat\phi_J(0,0)=1$, that mean equals the mean of the corresponding `U` map, up to numerical precision.
+{py:func}`skykit.wavelet_transform.wavelet_transform_tile` returns a {py:class}`skykit.feature_maps.FeatureMap` for one tile or a {py:class}`skykit.feature_maps.FeatureMapSet` for a TileSet. `order=1` computes `U1`; `order=2` adds `U2`. Each object's `paths` maps a feature index to `(j, theta)` or `(j1, theta1, j2, theta2)`. `feature(group, path, ...)` fetches a map by its wavelet parameters. The generated lowpass filter is not used in this feature stage.
 
-The FFT implements circular convolution. Apodizing the tile margin reduces boundary artifacts but does not make planar pixel frequencies identical to angular frequencies on the sphere. For `pol=True`, Q and U are transformed separately as scalar arrays; the nonlinear `S1` and `S2` channels should not be interpreted as new Stokes Q/U fields.
+The FFT implements circular convolution. Apodizing the tile margin reduces boundary artifacts but does not make planar pixel frequencies identical to angular frequencies on the sphere. For `pol=True`, Q and U are transformed separately as scalar arrays; the nonlinear feature channels should not be interpreted as new Stokes Q/U fields.
 
 ## Statistics from feature maps
 
-`compute_scattering_statistics` accepts a transform result containing `U1` and/or `U2`, a dictionary of feature arrays, or an HDF5 feature-map file. A single map set gives one statistic per tile and wavelet path. Two sets give only cross statistics for all path pairs; `U1_U2`, for example, has shape `(tiles, paths_in_set_1, paths_in_set_2)`. Polarization adds an axis after tiles. For a single tile the tile axis is absent. The path order follows the filter bank: scale then orientation for `U1`, and valid `j2 > j1` paths for `U2`.
+{py:func}`skykit.scattering_transform.scattering_transform` accepts a `FeatureMap`, `FeatureMapSet`, or HDF5 path. It returns a {py:class}`skykit.scattering_transform.ScatteringStatistics` object. Its `values` and `paths` dictionaries share keys. A single input gives one statistic per tile and wavelet path. Two inputs give only cross statistics for all path pairs; `U1_U2`, for example, has shape `(tiles, paths_in_set_1, paths_in_set_2)`. Polarization adds an axis after tiles. For a single tile the tile axis is absent. `statistic(group, path1, path2, tile=..., stokes=...)` retrieves a value using wavelet parameters.
 
 For one set, the value is the pixel mean or population variance of `operation1(U)`. For two sets, the value is the pixel mean or population variance of `operation1(U) * operation2(V)`. Both operations are optional JAX functions and must preserve map shape. The full tile, including margins, participates in each reduction.
 
-For large sets, use `transform_tileset(..., return_feature_maps=True, spatial_average=True, batch_size=4, feature_map_file="feature_maps.h5")`. This writes the `U1` and `U2` datasets into one HDF5 file while transforming small tile batches. `transform_tile` accepts the same `feature_map_file` argument for a single tile. The transform returns the path as `feature_map_file` while keeping its `S` coefficients in memory. The statistics function reads a tile and a limited number of paths at a time; `path_batch_size` controls the path chunk size. `save_feature_maps` writes already computed arrays, and `open_feature_maps` opens them for lazy access. Use `with open_feature_maps(path) as maps:` to close the file after reading.
+For large sets, use `wavelet_transform_tile(tiles, filters, order=2, filepath="feature_maps.h5", batch_size=4)`. This writes the `U1` and `U2` datasets and their path arrays into one HDF5 file while transforming small tile batches. A single tile uses the same `filepath` option. The returned feature object reads maps lazily; close it with a `with` block or `.close()`. `FeatureMap.to_hdf5` and `FeatureMapSet.to_hdf5` save already computed maps. `open_feature_maps(path)` reopens either type. The statistics function reads a tile and a limited number of paths at a time; `path_batch_size` controls the path chunk size.
