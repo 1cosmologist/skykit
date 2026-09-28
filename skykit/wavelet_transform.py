@@ -23,13 +23,15 @@ def _path_metadata(psi, order):
 
 def wavelet_transform_tile(tile_or_tileset, filter_bank, order=2, *,
                            filepath=None, batch_size=None):
-    """Compute U1/U2 modulus features and their scale/orientation paths.
+    """Compute complex U1/U2 wavelet features and their paths.
 
     ``tile_or_tileset`` is one ``(H, W)`` or polarized ``(2, H, W)`` tile,
     or a :class:`TileSet`. ``order`` is 1 or 2. With ``filepath``, write
     tile-major HDF5 datasets as batches complete and return a lazy file-backed
     :class:`FeatureMap` or :class:`FeatureMapSet`. Close that object after use.
     Without a path, return the same object type backed by NumPy arrays.
+    U1 is ``x * psi1``; U2 is ``abs(U1) * psi2`` for ``j2 > j1``.
+    Any further modulus belongs in ``scattering_transform`` operations.
     """
     if order not in (1, 2):
         raise ValueError("order must be 1 or 2")
@@ -49,12 +51,12 @@ def wavelet_transform_tile(tile_or_tileset, filter_bank, order=2, *,
     @jax.jit
     def transform_batch(batch):
         x_fft = jnp.fft.fft2(batch)
-        u1 = jnp.abs(jnp.fft.ifft2(x_fft[:, None] * psi_vals[None]))
+        u1 = jnp.fft.ifft2(x_fft[:, None] * psi_vals[None])
         result = {"U1": u1}
         if order == 2:
-            u1_fft = jnp.fft.fft2(u1)
-            groups = [jnp.abs(jnp.fft.ifft2(
-                u1_fft[:, i, None] * psi_vals[jnp.array(indices)][None]))
+            u1_fft = jnp.fft.fft2(jnp.abs(u1))
+            groups = [jnp.fft.ifft2(
+                u1_fft[:, i, None] * psi_vals[jnp.array(indices)][None])
                 for i, indices in enumerate(second_indices) if indices]
             result["U2"] = (jnp.concatenate(groups, axis=1) if groups else
                             jnp.empty((batch.shape[0], 0, height, width), dtype=u1.dtype))

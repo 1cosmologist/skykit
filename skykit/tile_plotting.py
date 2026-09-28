@@ -306,7 +306,7 @@ def plot_tile_proj_at(tileset, lon, lat, coord='G', dpi=None, title=None, **kwar
 
 def plot_scattering_coefs(tileset, feature_maps, face, tx, ty, order=1, path_idx=0, coord='G', dpi=None, title=None, **kwargs):
     '''
-    Plot a wavelet feature map for a tile using its WCS.
+    Plot the magnitude of a wavelet feature map for a tile using its WCS.
 
     Parameters
     ----------
@@ -340,7 +340,8 @@ def plot_scattering_coefs(tileset, feature_maps, face, tx, ty, order=1, path_idx
         tile_data = feature_maps[key][idx, :, path_idx, :, :]
     else:
         tile_data = feature_maps[key][idx, path_idx, :, :]
-    title_suffix = f'{key} {feature_maps.paths[key][path_idx]}'
+    tile_data = np.abs(tile_data)
+    title_suffix = f'|{key}| {feature_maps.paths[key][path_idx]}'
         
     base_title = title if title is not None else f'Face {face} tx {tx} ty {ty}'
         
@@ -371,7 +372,7 @@ def plot_scattering_coefs(tileset, feature_maps, face, tx, ty, order=1, path_idx
 
 def plot_scattering_tile(feature_maps, order=1, path_idx=0, dpi=None, title=None, **kwargs):
     '''
-    Plot a wavelet feature map from one tile without WCS projection.
+    Plot the magnitude of a wavelet feature map from one tile.
 
     Unlike plot_scattering_coefs, this function works on a FeatureMap.
     No TileSet or tile index is required. The image is
@@ -407,11 +408,11 @@ def plot_scattering_tile(feature_maps, order=1, path_idx=0, dpi=None, title=None
     raw = feature_maps[key]
     is_pol = feature_maps.pol
     if is_pol:
-        tile_q = raw[0, path_idx]
-        tile_u = raw[1, path_idx]
+        tile_q = np.abs(raw[0, path_idx])
+        tile_u = np.abs(raw[1, path_idx])
     else:
-        tile_data = raw[path_idx]
-    title_suffix = f'{key} {feature_maps.paths[key][path_idx]}'
+        tile_data = np.abs(raw[path_idx])
+    title_suffix = f'|{key}| {feature_maps.paths[key][path_idx]}'
 
     base_title = title if title is not None else title_suffix
 

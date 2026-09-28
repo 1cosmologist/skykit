@@ -26,6 +26,7 @@ The package imports its HEALPix and plotting modules at startup, so `healpy`, `a
 
 ```python
 import healpy as hp
+import jax.numpy as jnp
 import numpy as np
 
 from skykit import (apply_apodization, generate_filter_bank, healpix2tiles,
@@ -42,11 +43,12 @@ single_stats = scattering_transform(single)
 
 with wavelet_transform_tile(tiles, filters, order=2,
                             filepath="feature_maps.h5", batch_size=4) as features:
-    statistics = scattering_transform(features)
-    cross = scattering_transform(features, features)
+    statistics = scattering_transform(features, operation1=jnp.abs)
+    cross = scattering_transform(features, features,
+                                 operation1=jnp.abs, operation2=jnp.abs)
 ```
 
-`single` is a `FeatureMap`; `features` is a `FeatureMapSet`. Their `paths` map each `U1` or `U2` feature axis to its wavelet scales and orientations. `statistics` is a `ScatteringStatistics` object with corresponding `values` and `paths`. Use `reduction="variance"` for pixel variance and `operation1`/`operation2` for JAX functions applied before reduction. With two sets, `cross` contains only path-pair statistics. HDF5 files store the maps and paths together and are read in tile and path batches.
+`single` is a `FeatureMap`; `features` is a `FeatureMapSet`. Their `paths` map each `U1` or `U2` feature axis to its wavelet scales and orientations. `U1 = x * ψ₁` and `U2 = |U1| * ψ₂` are complex arrays. `statistics` is a `ScatteringStatistics` object with corresponding `values` and `paths`. Use `reduction="variance"` for pixel variance and `operation1`/`operation2` for any additional modulus or other JAX operation. With two sets, `cross` contains only path-pair statistics. HDF5 files store the complex maps and paths together and are read in tile and path batches.
 
 `healpix2tiles` expects RING ordering by default; use `nested=True` for a NESTED map. With `pol=True`, Q/U input must use the HEALPix/COSMO convention.
 

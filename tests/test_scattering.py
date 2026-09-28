@@ -22,8 +22,10 @@ def test_single_tile_paths_and_values():
     assert features.paths["U2"][0] == (0, 0.0, 1, 0.0)
     psi1 = np.asarray(bank["psi"][0]["val"])
     psi2 = np.asarray(bank["psi"][4]["val"])
-    u1 = np.abs(np.fft.ifft2(np.fft.fft2(tile) * psi1))
-    u2 = np.abs(np.fft.ifft2(np.fft.fft2(u1) * psi2))
+    u1 = np.fft.ifft2(np.fft.fft2(tile) * psi1)
+    u2 = np.fft.ifft2(np.fft.fft2(np.abs(u1)) * psi2)
+    assert np.iscomplexobj(features["U1"])
+    assert np.iscomplexobj(features["U2"])
     np.testing.assert_allclose(features.feature("U1", (0, 0.0)), u1, rtol=2e-5, atol=2e-6)
     np.testing.assert_allclose(features.feature("U2", (0, 0.0, 1, 0.0)), u2,
                                rtol=2e-5, atol=2e-6)
@@ -34,6 +36,11 @@ def test_single_tile_paths_and_values():
     np.testing.assert_allclose(stats.statistic("U1", (0, 0.0)), u1.mean(),
                                rtol=2e-5, atol=2e-6)
     np.testing.assert_allclose(stats["U2"], features["U2"].mean(axis=(-2, -1)),
+                               rtol=2e-5, atol=2e-6)
+    magnitude_stats = scattering_transform(features, operation1=jnp.abs)
+    np.testing.assert_allclose(magnitude_stats["U1"], np.abs(features["U1"]).mean(axis=(-2, -1)),
+                               rtol=2e-5, atol=2e-6)
+    np.testing.assert_allclose(magnitude_stats["U2"], np.abs(features["U2"]).mean(axis=(-2, -1)),
                                rtol=2e-5, atol=2e-6)
 
 
@@ -48,12 +55,12 @@ def test_tileset_and_cross_statistics():
     assert first["U1"].shape == (3, 2, 4, size, size)
     assert first["U2"].shape == (3, 2, 4, size, size)
     assert set(second.keys()) == {"U1"}
-    stats = scattering_transform(first, second, operation1=jnp.square,
+    stats = scattering_transform(first, second, operation1=jnp.abs,
                                  operation2=jnp.abs, reduction="variance",
                                  path_batch_size=2)
     assert set(stats.keys()) == {"U1_U1", "U2_U1"}
     assert stats["U1_U1"].shape == (3, 2, 4, 4)
-    expected = np.var(first["U1"][:, :, :, None] ** 2 *
+    expected = np.var(np.abs(first["U1"][:, :, :, None]) *
                       np.abs(second["U1"][:, :, None]), axis=(-2, -1))
     np.testing.assert_allclose(stats["U1_U1"], expected, rtol=2e-5, atol=2e-6)
     path1 = first.paths["U1"][0]
@@ -77,7 +84,10 @@ def test_hdf5_round_trip_single_and_set():
             assert isinstance(loaded, FeatureMap)
             assert loaded.pol
             assert loaded.paths == memory.paths
+            assert loaded["U1"].dtype.kind == "c"
+            assert loaded["U2"].dtype.kind == "c"
             np.testing.assert_allclose(loaded["U1"][:], memory["U1"])
+            np.testing.assert_allclose(loaded["U2"][:], memory["U2"])
             assert loaded.feature("U1", memory.paths["U1"][0], stokes=1).shape == (size, size)
         with wavelet_transform_tile(tile, bank, order=1, filepath=tile_path) as streamed_tile:
             assert isinstance(streamed_tile, FeatureMap)
@@ -89,6 +99,8 @@ def test_hdf5_round_trip_single_and_set():
         assert isinstance(streamed, FeatureMapSet)
         assert streamed.metadata["nside"] == size
         assert streamed["U1"].chunks[0] == 1
+        assert streamed["U1"].dtype.kind == "c"
+        assert streamed["U2"].dtype.kind == "c"
         disk_stats = scattering_transform(streamed)
         memory_stats = scattering_transform(wavelet_transform_tile(tileset, bank, order=2))
         np.testing.assert_allclose(disk_stats["U1"], memory_stats["U1"],

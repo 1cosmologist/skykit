@@ -59,6 +59,8 @@ def scattering_transform(feature_maps1, feature_maps2=None, *, operation1=None,
     return only cross statistics, reducing the pixelwise product
     ``operation1(U) * operation2(V)`` for every path pair. Operations are
     JAX-compatible callables that preserve map shape; None is identity.
+    U1 and U2 are complex wavelet responses, so pass ``jnp.abs`` as an
+    operation when magnitude statistics are desired.
     Reduction is the pixel mean or population variance. ``path_batch_size``
     bounds disk reads and intermediate products.
     """
