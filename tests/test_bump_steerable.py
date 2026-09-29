@@ -1,5 +1,3 @@
-from math import comb, sqrt
-
 import numpy as np
 import pytest
 
@@ -13,8 +11,7 @@ def test_half_plane_support_peak_and_angular_normalization():
     bank = generate_filter_bank(size, size, J=2, L=directions,
                                 wavelet_type="bump_steerable")
     filters = [np.asarray(item["val"]) for item in bank["psi"][:directions]]
-    expected_peak = sqrt(4 ** (directions - 1) /
-                         (directions * comb(2 * (directions - 1), directions - 1)))
+    expected_peak = np.sqrt(0.8)  # L=4 gives alpha^2 = 4^3 / (4 * C(6, 3))
 
     # Bin 9 of 40 is 0.225 cycles/pixel = 0.45*pi radians/pixel.
     np.testing.assert_allclose(filters[0][9, 0], expected_peak, rtol=2e-6)

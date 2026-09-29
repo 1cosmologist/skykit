@@ -78,6 +78,7 @@ For Gabor and Morlet, the Fourier width parallel to the wavevector is $\sigma_f$
 | --- | --- |
 | `M`, `N` | Tile dimensions in pixels. FFT-bin spacing is $1/M$ and $1/N$ cycles per pixel. |
 | `J` | Number of wavelet scales $j=0,\ldots,J-1$; the lowpass uses scale $J$. |
+| `scales_per_octave` | Number of bank scales per octave, $Q$. Carrier and width change by $2^{1/Q}$ per scale. Defaults to 1. |
 | `L` | Number of orientations, $\theta_l=l\pi/L$ for $l=0,\ldots,L-1$. |
 | `wavelet_type` | `"morlet"`, `"gabor"`, `"bump"`, or `"bump_steerable"`. |
 | `sigma0` | Base spatial scale in pixels. At scale $j$, $\sigma_j=\texttt{sigma0}\,2^j$ and $\sigma_{j,f}=1/(2\pi\sigma_j)$ cycles per pixel. For Gaussian filters this is the envelope width; it also sets the bank's lowpass width. |
@@ -85,7 +86,28 @@ For Gabor and Morlet, the Fourier width parallel to the wavevector is $\sigma_f$
 | `slant` | Ratio of transverse to longitudinal Fourier width for Morlet, Gabor, and the elliptical bump. It does not affect `bump_steerable`. |
 | `bump_steerable_xi0` | Scale-zero radial peak for `bump_steerable`, in **radians per pixel**. The default is $0.45\pi$. It must lie in $(0,\pi/2)$, keeping the finest-scale radial support inside the Nyquist disk. |
 
-The lowpass uses $\sigma_J=\texttt{sigma0}\,2^J$ and $\sigma_{J,f}=1/(2\pi\sigma_J)$. With the current default `xi0=π/4`, the nominal scale-zero carrier is $0.25$ cycles per pixel, a four-pixel period. `xi0` is not interchangeable with Kymatio's radians-per-pixel carrier parameter; equal numerical values give different filters.
+The lowpass uses $\sigma_J=\texttt{sigma0}\,2^{J/Q}$ and $\sigma_{J,f}=1/(2\pi\sigma_J)$. With the current default `xi0=π/4`, the nominal scale-zero carrier is $0.25$ cycles per pixel, a four-pixel period. `xi0` is not interchangeable with Kymatio's radians-per-pixel carrier parameter; equal numerical values give different filters.
+
+### Suggestions from tile and beam geometry
+
+{py:func}`skykit.jax_wavelets.suggest_filter_bank_params` returns a dictionary usable directly with `generate_filter_bank`. It supports all four bank types. Supply beam FWHM and square-pixel width in arcminutes, plus the tile shape in pixels:
+
+```python
+from skykit import generate_filter_bank, suggest_filter_bank_params
+
+params = suggest_filter_bank_params(
+    beam_fwhm_arcmin=4.8, patch_shape=(768, 768),
+    pixel_size_arcmin=1.6, wavelet_type="morlet")
+filters = generate_filter_bank(**params)
+```
+
+The suggested scale-zero carrier is $\xi_{\rm fine}=\pi\,\texttt{xi_scale}\,\texttt{pixel_size_arcmin}/\texttt{beam_fwhm_arcmin}$ radians per pixel, so its half-period equals the beam FWHM when `xi_scale=1`. The Gaussian beam response there is about 0.41. If this carrier is too high, the helper caps it and warns. For Morlet and Gabor, the cap puts the carrier plus two longitudinal Fourier standard deviations at the radial Nyquist limit; Gaussian tails still extend beyond it. For the compact bump, the cap puts the outer radial support at Nyquist. The steerable bump is capped at $0.45\pi$, leaving room below its strict $\pi/2$ bound. All of these use a conservative Nyquist disk within the square FFT domain.
+
+The helper chooses `J` so the coarsest carrier ring has at least $4L$ FFT samples, using $J=\lfloor Q\log_2(\xi_{\rm fine}\min(M,N)/(4L))\rfloor+1$. This is a resolution heuristic, not a guarantee of complete angular coverage. Gabor uses two scales per octave by default because its narrower bands leave weak coverage with dyadic spacing; the other filters use one. Override `J`, `L`, `xi_scale`, or `scales_per_octave` when needed. The helper rejects a requested `J` beyond its geometry-based maximum.
+
+For Morlet and Gabor, `sigma_xi` controls the constant product of Gaussian spatial width and carrier. It defaults to $0.6\pi$ and 4 respectively. For the elliptical bump, `width_ratio` sets Fourier radial width relative to carrier (default 0.7), and `angular_coverage` sets the desired angular support half-width in units of $\pi/L$ (default 1.1). Its automatic slant uses the ellipse's exact tangent angle $\arctan(ws/\sqrt{1-w^2})$; if a requested angle needs `slant > 1`, it uses 1. An explicit `slant` overrides these choices.
+
+The returned `sigma0` is a spatial width in pixels for every bank type. For the elliptical bump, this follows from its implementation's Fourier width $1/(2\pi\texttt{sigma0})$. The returned `xi0` for Morlet, Gabor, and bump is **half** the suggested carrier in radians per pixel because of the bank's historical convention. The steerable bump instead uses `bump_steerable_xi0` for the carrier; its `sigma0` controls only the Gaussian lowpass.
 
 To use the analytic bump steerable bank with four stored directions:
 
