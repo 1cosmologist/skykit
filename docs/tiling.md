@@ -23,6 +23,69 @@ Both methods assign the same exact HEALPix pixels to tile interiors. They differ
 
 For polarisation, each sampled Q/U pair is rotated into a frame obtained by parallel-transporting the tile centre's north direction to that pixel. This is done for either margin method. The returned Q/U remain in the COSMO convention.
 
+## Example: a tile near the north pole
+
+The following figures come from the 353 GHz dust intensity map in `examples/healpix2tiles.ipynb`. The notebook extracts the tile containing Galactic longitude 280° and latitude 90° from a RING-ordered `nside=2048` map. Its interior is 256 × 256 pixels, with a 64-pixel margin on each side, so each plotted array is 384 × 384 pixels. The thin square marks the interior; everything outside it is margin. The axes are tile pixel coordinates, not Galactic longitude and latitude.
+
+With the map loaded as `map_hpx`, the notebook makes both versions of that tile like this:
+
+```python
+import cmocean as cmo
+import skykit as sk
+
+geometric = sk.healpix2tiles(
+    map_hpx, 2048, 256, 64, margin_method="geometric"
+)
+topological = sk.healpix2tiles(
+    map_hpx, 2048, 256, 64, margin_method="topological"
+)
+face, tx, ty = geometric.tile_containing(280.0, 90.0)
+
+fig = sk.plot_tile_flat(
+    geometric, face, tx, ty, dpi=200,
+    title="Tile interior and margin (geometric)",
+    cmap=cmo.cm.balance, vmin=0, vmax=1.5e-3,
+)
+fig = sk.plot_tile_flat(
+    topological, face, tx, ty, dpi=200,
+    title="Tile interior and margin (topological)",
+    cmap=cmo.cm.balance, vmin=0, vmax=1.5e-3,
+)
+```
+
+```{figure} figures/dust_north-pole-tile_geometric.png
+:alt: North pole dust intensity tile with geometric margins and its interior outlined.
+:width: 85%
+
+**Geometric margins.** The pixels outside the outlined interior follow the local geometric continuation of the tile.
+```
+
+```{figure} figures/dust_north-pole-tile_topological.png
+:alt: The same north pole dust intensity tile with topological margins and its interior outlined.
+:width: 85%
+
+**Topological margins.** The interior is the same, while the margin samples are chosen by walking across HEALPix face boundaries. Both plots use the same color range, so differences outside the square can be compared directly.
+```
+
+For a Q/U map, set `pol=True`. The notebook averages the even- and odd-ring 353 GHz maps, smooths them by 7.5 arcminutes, and extracts a topological tile with a 128-pixel margin. The resulting array is 512 × 512 pixels per Stokes component. Given the prepared Q/U array as `qu_map`, the corresponding calls are:
+
+```python
+qu_tiles = sk.healpix2tiles(qu_map, 2048, 256, 128, pol=True)
+face, tx, ty = qu_tiles.tile_containing(280.0, 90.0)
+fig = sk.plot_tile_flat(
+    qu_tiles, face, tx, ty, dpi=200,
+    title="North pole polarization tile (topological)",
+    cmap=cmo.cm.balance,
+)
+```
+
+```{figure} figures/pol-dust_north-pole-tile_topological.png
+:alt: Topological north pole polarization tile, with Stokes Q and U shown side by side and their interiors outlined.
+:width: 100%
+
+**Polarisation tile.** `plot_tile_flat` displays Stokes Q and U side by side, with separate color scales. The outlined 256 × 256 interiors are surrounded by the 128-pixel margins.
+```
+
 ## Extract, process, and reconstruct
 
 ```python
