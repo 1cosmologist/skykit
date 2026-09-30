@@ -53,6 +53,8 @@ fig = sk.plot_tile_flat(
 )
 ```
 
+The important issue to understand is that for `topological` margin method, we use the pixels of the neighboring HEALPix tile. In some regions, like the poles of the map it will cause stretching of features as orientation of axes changes from between the faces. The `geometric` method tries to overcome this by extrapolating the coordinates from the edges of the interior region. Then it interpolates the correct map value for the coordinate. This has small issues at the corners where four faces meet. For both methods, we note that the region inside the margins are one-to-one mapping of the HEALPix superpixel. Hence there are no impacts from projection, interpolation etc. 
+
 ```{figure} figures/dust_north-pole-tile_geometric.png
 :alt: North pole dust intensity tile with geometric margins and its interior outlined.
 :width: 85%
